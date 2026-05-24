@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <!-- Dark hero panel (left 40%) -->
+    <linearGradient id="bgDark" x1="0" y1="0" x2="500" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f1518"/>
+      <stop offset="1" stop-color="#1c2226"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="65%">
+      <stop offset="0" stop-color="oklch(72% 0.16 50)" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="oklch(72% 0.16 50)" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Light content panel (right 60%) -->
+    <linearGradient id="bgLight" x1="0" y1="0" x2="0" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbfaf7"/>
+      <stop offset="1" stop-color="#f3f1ec"/>
+    </linearGradient>
+
+    <filter id="iconShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16"/>
+      <feOffset dx="0" dy="16"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.65"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Right (light) panel — full width first, then dark covers left 40% -->
+  <rect width="1200" height="630" fill="url(#bgLight)"/>
+
+  <!-- Left dark hero panel -->
+  <rect x="0" y="0" width="500" height="630" fill="url(#bgDark)"/>
+  <ellipse cx="250" cy="315" rx="400" ry="320" fill="url(#glow)"/>
+
+  <!-- Divider hairline -->
+  <line x1="500" y1="0" x2="500" y2="630" stroke="rgba(0,0,0,0.10)" stroke-width="1"/>
+
+  <!-- Icon centered in left panel — actual master SVG referenced -->
+  <image href="brew-browser.svg" x="90" y="135" width="320" height="320" filter="url(#iconShadow)"/>
+
+  <!-- Right panel: text -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif">
+    <!-- Wordmark -->
+    <text x="560" y="248" font-size="80" font-weight="700" fill="#1a1f23" letter-spacing="-1.8">brew-browser</text>
+
+    <!-- Tagline — amber, the brand pop -->
+    <text x="560" y="312" font-size="32" font-weight="600" fill="oklch(58% 0.15 45)">A native macOS GUI for Homebrew.</text>
+
+    <!-- Feature line 1 -->
+    <text x="560" y="380" font-size="22" font-weight="500" fill="#3a4147">Browse · Search · Install · Snapshot</text>
+
+    <!-- Feature line 2 -->
+    <text x="560" y="416" font-size="20" font-weight="400" fill="#5a6166">Full source. MIT licensed. No telemetry.</text>
+
+    <!-- amber accent rule -->
+    <line x1="560" y1="478" x2="660" y2="478" stroke="oklch(58% 0.15 45)" stroke-width="3"/>
+
+    <!-- URL — bold, dark, clearly readable -->
+    <text x="560" y="520" font-size="20" font-weight="600" fill="#1a1f23" font-family="ui-monospace, 'SF Mono', Menlo, monospace">brew-browser.zerologic.com</text>
+  </g>
+</svg>

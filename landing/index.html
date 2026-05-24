@@ -4,20 +4,81 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="dark light">
-  <meta name="theme-color" content="#0f1518">
+  <meta name="theme-color" content="#0a0d0f" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f7f6f3" media="(prefers-color-scheme: light)">
 
+  <!-- Canonical & language -->
+  <link rel="canonical" href="https://brew-browser.zerologic.com/">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+
+  <!-- Primary meta -->
   <title>brew-browser — a native macOS GUI for Homebrew</title>
   <meta name="description" content="Browse, search, install, and snapshot Homebrew packages from a small, fast native desktop app. Full source. MIT licensed. No telemetry, no accounts.">
+  <meta name="author" content="Michael Sitarzewski">
+  <meta name="keywords" content="homebrew, brew, macOS, GUI, package manager, Tauri, Svelte, Rust, MIT, open source, desktop app">
+
+  <!-- Favicons & app icons -->
+  <link rel="icon" type="image/svg+xml" href="/brew-browser.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/brew-browser.svg">
+  <link rel="mask-icon" href="/brew-browser.svg" color="#7dc855">
+  <meta name="apple-mobile-web-app-title" content="brew-browser">
+  <meta name="application-name" content="brew-browser">
+  <meta name="msapplication-TileColor" content="#0a0d0f">
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="/manifest.json">
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://brew-browser.zerologic.com">
+  <meta property="og:site_name" content="brew-browser">
+  <meta property="og:url" content="https://brew-browser.zerologic.com/">
   <meta property="og:title" content="brew-browser — a native macOS GUI for Homebrew">
   <meta property="og:description" content="Browse, search, install, and snapshot Homebrew packages. Full source. MIT licensed. No telemetry, no accounts.">
-  <meta property="og:image" content="https://brew-browser.zerologic.com/brew-browser.svg">
+  <meta property="og:image" content="https://brew-browser.zerologic.com/social-card.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="brew-browser app icon on a dark background, with the wordmark and tagline 'A native macOS GUI for Homebrew.'">
+  <meta property="og:locale" content="en_US">
 
-  <link rel="icon" type="image/svg+xml" href="/brew-browser.svg">
-  <link rel="apple-touch-icon" href="/brew-browser.svg">
+  <!-- Twitter / X -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@msitarzewski">
+  <meta name="twitter:creator" content="@msitarzewski">
+  <meta name="twitter:url" content="https://brew-browser.zerologic.com/">
+  <meta name="twitter:title" content="brew-browser — a native macOS GUI for Homebrew">
+  <meta name="twitter:description" content="Browse, search, install, and snapshot Homebrew packages. Full source. MIT licensed. No telemetry, no accounts.">
+  <meta name="twitter:image" content="https://brew-browser.zerologic.com/social-card.png">
+  <meta name="twitter:image:alt" content="brew-browser app icon on a dark background, with the wordmark and tagline 'A native macOS GUI for Homebrew.'">
+
+  <!-- JSON-LD structured data (Google rich results) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "brew-browser",
+    "description": "A native macOS GUI for Homebrew. Browse, search, install, and snapshot Homebrew packages from a small, fast native desktop app. Full source. MIT licensed. No telemetry, no accounts.",
+    "applicationCategory": "DeveloperApplication",
+    "applicationSubCategory": "Package Manager UI",
+    "operatingSystem": "macOS 13+",
+    "url": "https://brew-browser.zerologic.com/",
+    "downloadUrl": "https://github.com/msitarzewski/brew-browser/releases/latest",
+    "softwareVersion": "0.1.0",
+    "license": "https://opensource.org/licenses/MIT",
+    "author": {
+      "@type": "Person",
+      "name": "Michael Sitarzewski",
+      "url": "https://github.com/msitarzewski"
+    },
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "image": "https://brew-browser.zerologic.com/social-card.png"
+  }
+  </script>
+
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -44,7 +105,7 @@
 
         <div class="feature">
           <h3>Library</h3>
-          <p>Every installed formula and cask in one dense, filterable list, with outdated badges and a slide-over detail panel. Cask icons extracted from the real `.app` bundle.</p>
+          <p>Every installed formula and cask in one dense, filterable list, with outdated badges and a slide-over detail panel. Cask icons extracted from the real <code>.app</code> bundle.</p>
         </div>
 
         <div class="feature">
