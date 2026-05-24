@@ -7,7 +7,6 @@
   import { activity } from "$lib/stores/activity.svelte";
   import { services } from "$lib/stores/services.svelte";
   import { settings } from "$lib/stores/settings.svelte";
-  import { github } from "$lib/stores/github.svelte";
 
   let { children } = $props();
 
@@ -28,13 +27,16 @@
     // Prime the services list so the sidebar's "Services" badge can show a
     // count from first paint; the Services tab refreshes again on mount.
     void services.load();
-    // Hydrate GitHub sign-in status on app start so the intercept guard
-    // in PackageDetail (requireGithubSignIn) sees the real signed-in
-    // state from the first paint. Without this, the first click on
-    // Star/Watch/File-issue would bounce the user to Settings → GitHub
-    // even when they're already authenticated, because the status only
-    // hydrated when Settings → GitHub mounted.
-    void github.loadStatus();
+    // NOTE: GitHub sign-in status is intentionally NOT hydrated here.
+    // `github.loadStatus()` reads from macOS Keychain, which prompts
+    // the user the first time a new app binary tries to access an
+    // existing entry. Probing on every app launch trains users to
+    // dismiss the prompt without reading it, and is intrusive when
+    // they have no intention of using GitHub features.
+    // Instead: probe lazily — `requireGithubSignIn()` (in PackageDetail)
+    // awaits loadStatus on first action click, and Settings → GitHub
+    // calls loadStatus when its panel mounts. Both contexts are
+    // user-initiated, so a Keychain prompt is contextual and expected.
 
     // Native macOS menu bridge — Rust emits `menu:about` / `menu:settings`
     // when the user picks those items from the App menu in the system menu

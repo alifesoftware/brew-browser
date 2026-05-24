@@ -89,8 +89,8 @@
           <button class="link" onclick={openAgencyAgents}><strong>Agency Agents</strong></button>
           — the multi-agent toolkit that orchestrated the waves (Backend
           Architect, Frontend Developer, Security Engineer, Code Reviewer,
-          Technical Writer, and friends), powered by Anthropic's
-          <strong>Claude Opus 4.7</strong> and the <strong>Claude Agent SDK</strong>.
+          Technical Writer, and friends), powered by <strong>Claude Code</strong> in
+          the terminal, running <strong>Opus 4.7 [1m]</strong>.
         </p>
         <p class="thanks">
           Thanks also to the Homebrew project for the package data, every

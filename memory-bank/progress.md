@@ -338,7 +338,7 @@ The Technical Writer pass appended sections to:
 - Requires app restart (menus build at startup)
 
 #### About brew-browser modal
-- New `src/lib/components/AboutModal.svelte` — 🍺 hero, version + brew + license + repo meta, big "♥ Donate to the project" CTA, credits paragraph crediting **Agency Agents** (clickable link → https://github.com/msitarzewski/agency-agents) "powered by Anthropic's Claude Opus 4.7 and the Claude Agent SDK"
+- New `src/lib/components/AboutModal.svelte` — 🍺 hero, version + brew + license + repo meta, big "♥ Donate to the project" CTA, credits paragraph crediting **Agency Agents** (clickable link → https://github.com/msitarzewski/agency-agents) "powered by Claude Code in the terminal, running Opus 4.7 [1m]"
 - Mounted in `+page.svelte`, opened via `ui.openAbout()` or the native App menu's "About brew-browser" item
 
 #### GitHub Sponsors setup
@@ -454,3 +454,61 @@ The Technical Writer pass appended sections to:
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `npm run check`: 0 errors
 - `npm run build`: clean
+
+---
+
+## 2026-05-24 (v0.2.1 hotfix)
+
+### What & why
+
+Hotfix on top of v0.2.0 (`e04dbff`) that addresses two distinct issues users hit immediately on the v0.2.0 .dmg:
+
+1. **macOS Keychain prompt on every launch.** The v0.2.0 fix for "Star/Watch bounces to Settings even when signed in" added an eager `void github.loadStatus()` to `+layout.svelte`'s `onMount`. That call probes the Keychain via `keyring::get`, which prompts the user when the binary signature doesn't match an existing item's ACL. Fresh v0.2.0 installs (new signature vs whatever wrote the Keychain entry) saw the "brew-browser wants to use your confidential information stored in dev.openbrew.browser" prompt on every launch — even users who'd never used a GitHub feature. Worse, it trained users to dismiss the prompt without context.
+
+   Fix: removed the eager call. Made `requireGithubSignIn(actionLabel)` async; it now lazy-probes the Keychain on the first GitHub-action click (Star / Watch / File-issue). Settings → GitHub still hydrates status on panel mount (unchanged). Net effect: the macOS prompt only fires when the user is actively trying to use the token, which is the contextual moment it's meant for.
+
+2. **Three GitHub-auth UX bugs** (the cluster fixed in commit `e04dbff` after the initial v0.2.0 push but already shipped in v0.2.0's .dmg):
+   - "Signed in as @github user." placeholder in the post-sign-in toast (fixed: `loadStatus()` runs before `signinState = approved` flips)
+   - Stack of duplicate "Signed in to GitHub" toasts (fixed: `untrack(() => github.status?.username)` in DeviceFlowModal so the effect's only reactive dep is `signinState`)
+   - Star/Watch/File-issue bounced authenticated users to Settings (fixed by #1 above — lazy probe in `requireGithubSignIn`)
+
+### Other small things
+
+- Replaced "Powered by Anthropic's Claude Opus 4.7 and the Claude Agent SDK" with "Powered by Claude Code in the terminal, running Opus 4.7 [1m]" in README.md + AboutModal.svelte. More accurate attribution: Claude Code is the runtime (this CLI), `claude-opus-4-7[1m]` is the model.
+- Added `.gitleaks.toml` allowlist for the documented public OAuth Device Flow client_id (`Ov23liJZKbvrSBuiOPkT`). Per RFC 8628 §3.1, Device Flow client_ids are public by design and intentionally committed.
+- `memory-bank/security.md` §14 appended: full v0.2.0 audit re-run results (cargo audit 0, cargo deny ok, npm audit 0, semgrep 0, gitleaks 0-after-allowlist) — verdict READY-FOR-SCRUTINY preserved.
+
+### Files this hotfix
+
+**Modified:**
+- `src-tauri/Cargo.toml` (version 0.2.0 → 0.2.1)
+- `src-tauri/tauri.conf.json` (version 0.2.0 → 0.2.1)
+- `src/routes/+layout.svelte` (removed eager `github.loadStatus()` from onMount)
+- `src/lib/components/PackageDetail.svelte` (async `requireGithubSignIn` + 3 awaited call sites)
+- `src/lib/components/AboutModal.svelte` (Built-with credit updated)
+- `src/lib/stores/github.svelte.ts` (poll loop: `loadStatus` before `signinState = approved`)
+- `src/lib/components/DeviceFlowModal.svelte` (`untrack` wrap on the toast effect's status read)
+- `README.md` (v0.2.1 status block + Built-with credit + Sponsor badge)
+- `landing/index.html` (softwareVersion 0.2.0 → 0.2.1)
+- `memory-bank/security.md` (appended §14 v0.2.0 audit results)
+- `memory-bank/progress.md` (this entry)
+
+**New:**
+- `.gitleaks.toml` (allowlist for the public Device Flow client_id)
+
+### Tests & lint
+
+- `cargo test`: 411 passed, 0 failed, 6 ignored
+- `cargo clippy --all-targets -- -D warnings`: clean
+- `npm run check`: 0 errors
+- `npm run build`: clean
+
+### Security audit (re-run for v0.2.0/v0.2.1 surface)
+
+- `cargo audit`: 0 vulns
+- `cargo deny check`: advisories ok, bans ok, licenses ok, sources ok
+- `npm audit --omit=dev`: 0 vulnerabilities
+- `semgrep` (security-audit + OWASP-10 + Rust + TS, 113 rules): 0 findings
+- `gitleaks`: 0 leaks (after allowlist; 2 false positives on the public client_id were the only initial hits)
+
+**Verdict: READY-FOR-SCRUTINY preserved.** See `memory-bank/security.md` §14 for the full breakdown.

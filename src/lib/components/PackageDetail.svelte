@@ -430,9 +430,19 @@
   /** Intercept any authed GitHub action while signed out: deep-link to
       Settings → GitHub and toast a hint. Returns false when the caller
       should stop. Keeps the action buttons usable without painting a
-      static "sign in to …" hint in every package detail. */
-  function requireGithubSignIn(actionLabel: string): boolean {
-    if (githubSignedIn) return true;
+      static "sign in to …" hint in every package detail.
+
+      Lazy-probes the Keychain on demand: if `github.status` hasn't been
+      hydrated yet (the app no longer probes on launch — that would
+      train users to dismiss the macOS Keychain prompt), this awaits
+      the probe before deciding. The prompt only fires when the user
+      is actively trying to do a GitHub action — contextual, not
+      surprising. */
+  async function requireGithubSignIn(actionLabel: string): Promise<boolean> {
+    if (github.status === null && !github.statusLoading) {
+      await github.loadStatus();
+    }
+    if (github.status?.signedIn) return true;
     ui.openSettings("github");
     toast.info(
       `Sign in to GitHub to ${actionLabel}`,
@@ -448,7 +458,7 @@
 
   async function onToggleStar() {
     if (!pkg?.homepage || starToggling) return;
-    if (!requireGithubSignIn("star this package")) return;
+    if (!(await requireGithubSignIn("star this package"))) return;
     starToggling = true;
     const hp = pkg.homepage;
     try {
@@ -471,7 +481,7 @@
 
   async function onToggleWatch() {
     if (!pkg?.homepage || watchPending) return;
-    if (!requireGithubSignIn("watch this package")) return;
+    if (!(await requireGithubSignIn("watch this package"))) return;
     watchPending = true;
     const want = !watching;
     try {
@@ -515,7 +525,7 @@
 
   async function openPackageIssue() {
     if (!pkg?.homepage) return;
-    if (!requireGithubSignIn("file an issue on this repo")) return;
+    if (!(await requireGithubSignIn("file an issue on this repo"))) return;
     const repoInfo = githubRepoFromHomepage(pkg.homepage);
     if (!repoInfo) return;
     const ver = await ensureAppVersion();

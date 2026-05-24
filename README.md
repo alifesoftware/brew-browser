@@ -9,8 +9,7 @@
 
 A small, fast desktop app for browsing, searching, installing, and snapshotting Homebrew packages. Full source, MIT-licensed, no telemetry, no accounts.
 
-<!-- screenshot: Library view, dark theme, with a few installed formulae and one outdated row -->
-![brew-browser — Library (dark)](docs/screenshots/library-dark.png)
+![brew-browser — Dashboard (dark)](docs/screenshots/dashboard-dark.png)
 
 ## Why this exists
 
@@ -112,7 +111,14 @@ Contributions welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the dev loop
 
 ## Status
 
-**v0.2.0** shipped (signed + notarized). All seven core panes live: Dashboard, Library, Discover (with bundled catalog + 15,725 AI-curated friendly names and summaries), Trending, Snapshots, Services, and Activity. Optional GitHub integration via OAuth Device Flow is intent-discovered — sign-in only prompts when you actually try to star / watch / file an issue, never as static UI clutter. Settings ships with Paranoid Mode and a corrupt-recovery default. Native macOS title bar with traffic-light alignment, collapsible sidebar with persistent type-ahead search, (i) info popovers in place of AI badges for every enriched field. Expect rough edges in some app-icon edge cases (pkg-installer casks without `.app` bundles) and first-run niceties.
+**v0.2.1** shipped (signed + notarized). All seven core panes live: Dashboard, Library, Discover (with bundled catalog + 15,725 AI-curated friendly names and summaries), Trending, Snapshots, Services, and Activity. Optional GitHub integration via OAuth Device Flow is intent-discovered — sign-in only prompts when you actually try to star / watch / file an issue, never as static UI clutter. The Keychain is touched lazily so a fresh install never triggers a macOS auth prompt unless you actually use a GitHub feature. Settings ships with Paranoid Mode and a corrupt-recovery default. Native macOS title bar with traffic-light alignment, collapsible sidebar with persistent type-ahead search, (i) info popovers in place of AI badges for every enriched field. Expect rough edges in some app-icon edge cases (pkg-installer casks without `.app` bundles) and first-run niceties.
+
+**v0.2.1** (hotfix on top of v0.2.0):
+- Lazy Keychain probe — a fresh install no longer fires the macOS "wants to use your confidential information stored in dev.openbrew.browser" prompt on launch. `github.loadStatus()` only runs when you actually click Star / Watch / File-issue, or open Settings → GitHub.
+- Fixed the post-sign-in success toast (was showing "@github user" placeholder before the real username loaded).
+- Fixed the duplicate "Signed in to GitHub" toast stack (the toast effect was re-firing on every status hydration; the `untrack` wrapping pins it to one toast per real state transition).
+- Updated the build credit to the accurate runtime: Claude Code in the terminal, running Opus 4.7 [1m].
+- New `.gitleaks.toml` allowlist for the documented public OAuth client_id (RFC 8628 §3.1 — Device Flow IDs aren't credentials).
 
 ## License
 
@@ -126,7 +132,7 @@ Contributions welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the dev loop
 
 ## Built with
 
-Built with **[Agency Agents](https://github.com/msitarzewski/agency-agents)**, by the creator of Agency Agents — the multi-agent toolkit (Backend Architect, Frontend Developer, Security Engineer, Code Reviewer, Technical Writer, and friends) that orchestrated brew-browser's design and implementation. Powered by Anthropic's Claude Opus 4.7 and the Claude Agent SDK.
+Built with **[Agency Agents](https://github.com/msitarzewski/agency-agents)**, by the creator of Agency Agents — the multi-agent toolkit (Backend Architect, Frontend Developer, Security Engineer, Code Reviewer, Technical Writer, and friends) that orchestrated brew-browser's design and implementation. Powered by Claude Code in the terminal, running Opus 4.7 [1m].
 
 ## Support the project
 

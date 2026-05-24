@@ -346,3 +346,41 @@ This section documents the security posture of every sub-phase shipped between c
 
 The Phase 12 work expanded the documented outbound network surface from 4 paths to 7 (the three new ones are catalog refresh, GitHub API, and GitHub OAuth). Every new path is consent-gated at Settings, kill-switched by the paranoid-mode master toggle, and disclosed in README §"Open by default". The Phase 13 work added zero runtime network paths — enrichment is a build-time artifact. The Wave 3 READY-FOR-SCRUTINY posture is **preserved**: every new attack surface introduced in this session ships behind named gates with unit tests pinning the gate behavior, the secret-handling rules around the GitHub token are non-negotiable and verified mechanically, and the single `require_network(feature)` chokepoint means a future contributor cannot add a new outbound command without going through the same kill switch as the existing surface.
 
+
+---
+
+## 14. v0.2.0 audit re-run (2026-05-24)
+
+**Scope.** Re-run the full tool battery against the v0.2.0 commit (`e04dbff` — title bar + sidebar restructure, info popovers, intercept GitHub flow, GitHub-auth hydration fixes, lazy Keychain probe).
+
+**New code surface to review.** Two new components (`InfoButton.svelte`, `TitlebarControls.svelte`); one new helper (`requireGithubSignIn` in `PackageDetail.svelte`, now async with lazy `loadStatus`); deep-link plumbing in `ui.openSettings(section?)` + `Settings.svelte`; the sidebar type-ahead search wiring against the shared `search` store; `untrack` wrapping in `DeviceFlowModal.svelte`; the GitHub OAuth client_id (`Ov23liJZKbvrSBuiOPkT`) committed live in `src-tauri/src/github/auth.rs`.
+
+### 14.1 Tool battery results
+
+| Tool | Result | Notes |
+|---|---|---|
+| `cargo audit` | **0 vulns** | 17 unmaintained warnings and 1 unsoundness all in GTK/glib transitive deps that compile out on macOS — same posture as Wave 3. |
+| `cargo deny check` | **advisories ok, bans ok, licenses ok, sources ok** | No new dependency issues vs Wave 3. |
+| `npm audit --omit=dev` | **0 vulnerabilities** | 25 production packages clean. |
+| `gitleaks` | **0 leaks** (after allowlist) | Initial scan flagged 2 hits — both false positives on the documented GitHub Device Flow `client_id` ("Ov23liJZKbvrSBuiOPkT") appearing in `memory-bank/{progress,activeContext}.md`. Per RFC 8628 §3.1, Device Flow client_ids are public by design and intentionally committed (see §13.5). Added `.gitleaks.toml` with an explicit allowlist for this exact string; re-scan clean. |
+| `semgrep` (security-audit + OWASP-10 + Rust + TypeScript) | **0 findings** across 113 rules / 104 targets | Same posture as Wave 3 — no new findings introduced by the v0.2.0 components. |
+
+### 14.2 Manual review of new code
+
+- **`InfoButton.svelte`** — popover content sourced from `Props.title / body / label` strings supplied at the call site (compile-time constants in every current usage; PackageDetail's five InfoButton instances all pass static string literals). No `@html`, no `innerHTML`, no `eval`, no template injection of user-controlled data. `position: fixed` viewport-clamping is purely visual. The `onReport` callback is a closure over `openWrongEnrichedIssue(...)` / `openWrongCategoryIssue()` which already URL-encode their inputs via `percent_encoding::utf8_percent_encode` (per §13.6).
+- **`TitlebarControls.svelte`** — three event handlers (`pickTheme`, `ui.openSettings()`, `safeOpenUrl(SPONSOR_URL)`). `SPONSOR_URL` is a compile-time string constant (`https://github.com/sponsors/msitarzewski`). `safeOpenUrl` enforces the scheme allowlist (`http(s)` only) per the existing homepage-opener gate. No user-controlled URLs reach the cluster.
+- **`requireGithubSignIn(actionLabel)`** — async helper. On first call (when `github.status === null` and `!statusLoading`), awaits `github.loadStatus()` — which probes the Keychain via the existing `github_status` IPC. The Keychain probe is gated by macOS's standard ACL; if the binary signature doesn't match an existing ACL, macOS prompts the user. **This is the correct trust boundary** — the user is actively trying to take a GitHub action when this fires, so a Keychain prompt is contextual. The previous v0.2.0 .dmg eagerly called `loadStatus()` on app launch, which trained users to dismiss the prompt without context; this lazy approach restores the prompt's signal value.
+- **`ui.openSettings(section?)`** — deep-link plumbing. `section` is typed as `SettingsSection | null` (`"appearance" | "network" | "github" | "brew" | "activity" | "about" | null`). The Settings modal reads it via `ui.settingsInitialSection ?? "appearance"`. No string-based dispatch, no eval, no surface for the caller to inject arbitrary section names.
+- **Sidebar type-ahead search** — wires to the existing shared `search` store, which calls `brewSearch(q)` via the `brew_search` IPC. The IPC handler already validates `q` against the `validate_package_name`-adjacent regex (covered by §13.6 search hotfix). Dropdown items render `hit.name`, `hit.kind`, `hit.installed` — all typed values from `SearchResults`, no template injection. No `@html`, no XSS surface.
+- **`untrack(() => github.status?.username)`** in `DeviceFlowModal.svelte` — Svelte 5 primitive that opts a reactive read out of the surrounding `$effect`'s dependency tracking. Pure runtime-reactivity concern; no security implications. Fixed a duplicate-toast bug, not a security issue.
+- **GitHub OAuth `client_id` in `auth.rs`** — set live to `"Ov23liJZKbvrSBuiOPkT"`. Per the §13.5 verification (`client_id` is a hardcoded `const`, Device Flow IDs aren't credentials per RFC 8628 §3.1), this is the correct trust posture. The client_id appears in every public binary, in the source tree, and in the memory bank — all intentional, all RFC-compliant. The `Iv1.PLACEHOLDER_REPLACE_BEFORE_RELEASE` fail-fast guard (which would surface a friendly "GitHub sign-in is not configured in this build" error) is now unreachable from a normal build, but kept in place as a defensive sentinel for forks that strip the value.
+
+### 14.3 Verdict
+
+**READY-FOR-SCRUTINY preserved.** The v0.2.0 work introduced 2 new components, 1 new helper, and a small set of plumbing changes. The tool battery surfaces 0 vulnerabilities and 0 findings across cargo audit, cargo deny, npm audit, semgrep (113 rules), and gitleaks (after allowlist for the documented public client_id). The new code surface introduces no new attack vectors: no template injection, no eval, no `@html`, no unvalidated user input reaching shell or URL openers, no token-handling changes (the GitHub auth code path is unchanged at the trust-boundary level — only the call-site timing was adjusted from eager to lazy probing, which improves the user-trust signal of the Keychain prompt rather than weakening any gate).
+
+The Keychain prompt UX fix (lazy probe in `requireGithubSignIn` instead of eager probe in `+layout.svelte`) is a **defense-in-depth improvement** — it preserves the contextual signal of macOS's Keychain ACL prompts. Users who never interact with GitHub features never see the prompt; users who click Star/Watch/File-issue see it exactly when they're about to use the token, making the prompt meaningful rather than noise.
+
+Zero `unsafe` Rust in any new code. Zero `@html` in any new template. Zero new outbound network paths (the new search wiring uses the existing `brew_search` IPC which talks only to the local `brew` CLI; the new GitHub action call-sites talk to the same `api.github.com` endpoints already documented in §13.6).
+
+**Carry-forwards.** Same as Wave 3: 17 GTK unmaintained warnings (compile out on macOS); 2 SettingsSectionGitHub unused-CSS warnings (cosmetic; pre-existing).
