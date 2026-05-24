@@ -57,18 +57,23 @@
 
 #![deny(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro)]
 
+pub mod actions;
 pub mod auth;
 pub mod stats;
 pub mod url;
 
 // Re-exports used by `commands::github` and tests. The `Token`,
 // `KEYCHAIN_*`, and `GITHUB_OAUTH_*` items are exported even when
-// callers don't currently use them so external code (and future
-// Phase 12f work) can reach them without re-importing from sub-mods.
+// callers don't currently use them so external code can reach them
+// without re-importing from sub-mods.
+#[allow(unused_imports)]
+pub use actions::{
+    create_issue, is_starred, star, unstar, unwatch, watch, CreatedIssue,
+};
 #[allow(unused_imports)]
 pub use auth::{
-    DeviceFlowStart, GithubStatusDto, PollResult, PollResultDto, Token, GITHUB_OAUTH_CLIENT_ID,
-    GITHUB_OAUTH_SCOPES, KEYCHAIN_ACCOUNT_TOKEN, KEYCHAIN_SERVICE,
+    read_scopes, DeviceFlowStart, GithubStatusDto, PollResult, PollResultDto, Token,
+    GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_SCOPES, KEYCHAIN_ACCOUNT_TOKEN, KEYCHAIN_SERVICE,
 };
 pub use stats::{fetch_repo_stats, RepoStats};
 #[allow(unused_imports)]

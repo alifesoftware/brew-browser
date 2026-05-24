@@ -8,6 +8,7 @@
  */
 
 import { categoriesData } from "$lib/api";
+import { settings } from "$lib/stores/settings.svelte";
 import type { CategoriesData, PackageKind } from "$lib/types";
 
 interface CategoryTile {
@@ -99,6 +100,19 @@ class CategoriesStore {
   /** Pretty label for a slug. Falls back to the slug if data isn't loaded. */
   labelOf(slug: string): string {
     return this.data?.categories[slug]?.label ?? slug;
+  }
+
+  /**
+   * Phase 13 — central gate for all category-driven UI. When the master
+   * AI Features toggle is OFF, every consumer should treat categories
+   * as if they don't exist (donut chart hidden, chip filters hidden,
+   * Discover tile grid hidden, PackageDetail Categories row hidden).
+   *
+   * Components read this as `categories.visible` and `{#if categories.visible}`
+   * around any category-rendering branch.
+   */
+  get visible(): boolean {
+    return settings.effective.aiFeaturesEnabled;
   }
 }
 

@@ -121,6 +121,89 @@ A placeholder `client_id` ships with the source tree (`Iv1.PLACEHOLDER_REPLACE_B
 
 If you fork brew-browser, repeat the steps above against your own GitHub account. Don't reuse the upstream `client_id` — it ties any sign-in attempts (and the resulting rate-limit consumption) back to the upstream maintainer's OAuth app.
 
+## Catalog enrichment (Phase 13 — optional)
+
+The bundled `enrichment.json.gz` is the LLM-generated metadata layer
+that adds friendly names, expanded summaries, use-case bullets,
+similar-package recommendations, and tech-stack tags to each Homebrew
+token. It ships **as a placeholder** in the repo (114 bytes — empty
+entries map) so the build is reproducible without an Anthropic API key;
+you only need to bake real data before tagging a release.
+
+### Zero runtime LLM calls
+
+The app never calls an LLM. The enrichment payload is read-only and
+`include_bytes!`d into the binary at compile time
+(`src-tauri/src/enrichment/mod.rs`). Toggling AI Features off in
+Settings → Appearance hides the enriched UI but doesn't change what's
+in the bundle. The `anthropic` SDK never ends up in the Rust binary.
+
+### Run order
+
+```
+tools/catalog/fetch.py          # refresh formula.json + cask.json
+  → tools/categorize/categorize.py   # update categories.json (delta only)
+  → tools/enrich/enrich.py           # update enrichment.json.gz (delta only)
+  → cargo tauri build                # bake everything into the binary
+```
+
+The enrich step depends on a fresh catalog (its source of truth for
+which tokens exist) but is otherwise independent of the categorize
+step.
+
+### Tier system + cost guard
+
+`tools/enrich/enrich.py` accepts three opt-in flags. Running with no
+flags prints help and exits — you cannot accidentally spend money on
+an Anthropic API call.
+
+| Flag        | What it bakes                                              | Approx cost |
+|-------------|------------------------------------------------------------|-------------|
+| `--tier-a`  | friendly_name + summary for tokens with thin/missing desc  | $3-5        |
+| `--tier-b`  | use_cases + similar + tags for all tokens                  | $10-15      |
+| `--all`     | both tiers in one pass                                     | $13-20      |
+| `--dry-run` | (combined with above) compute diff + estimate, no API call | $0          |
+
+Delta runs (after the initial bulk) cost ~$0.05/week — only changed
+tokens get re-enriched, tracked by the hash-state file at
+`tools/enrich/state/last-snapshot.json`.
+
+### ANTHROPIC_API_KEY
+
+Required for any non-`--dry-run` invocation. Lives in
+`tools/enrich/.env` (gitignored, mirroring `tools/categorize/.env`):
+
+```sh
+cd tools/enrich
+cp .env.example .env
+# edit .env, paste ANTHROPIC_API_KEY=sk-ant-...
+```
+
+The Python script reads the key via `python-dotenv`. The Rust binary
+NEVER reads it — there is no runtime path that needs an API key.
+
+### Operational examples
+
+```sh
+# Always start with a dry run after refreshing the catalog:
+python tools/enrich/enrich.py --tier-a --dry-run
+
+# Bake Tier A (initial run):
+python tools/enrich/enrich.py --tier-a
+
+# Bake Tier B (initial run; takes longer due to bigger prompts):
+python tools/enrich/enrich.py --tier-b
+
+# Both tiers in one pass (full bulk):
+python tools/enrich/enrich.py --all
+
+# Subsequent delta-only run (typically ~30-50 tokens, <$0.05):
+python tools/enrich/enrich.py --all
+```
+
+After a successful run, commit the updated
+`src-tauri/data/enrichment.json.gz` alongside the catalog refresh.
+
 ## Unsigned builds (for testing only)
 
 If you just want to test the build pipeline without notarization:

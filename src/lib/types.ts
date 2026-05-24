@@ -230,6 +230,55 @@ export interface CategoriesData {
 }
 
 // =========================================================
+// 2.9.4 Enrichment (Phase 13)
+// =========================================================
+
+/**
+ * One enrichment record, keyed by Homebrew token. All fields are
+ * optional / possibly-empty so the placeholder bundle round-trips and
+ * partially-enriched records (only Tier A, only Tier B) render
+ * progressively.
+ *
+ * Wire shape matches the Rust `EnrichmentEntry` struct (camelCase).
+ * The Tauri command serialises with `skip_serializing_if = "Option::is_none"`
+ * on the optional fields, so consumers must accept `undefined` in addition
+ * to `null` and treat both as "not set".
+ */
+export interface EnrichmentEntry {
+  /** Display name (e.g. "PostgreSQL 14"). Null/undefined when Tier A
+      hasn't been run for this token. */
+  friendlyName?: string | null;
+  /** 1-2 sentence "what + when" summary. Null/undefined when Tier A
+      hasn't been run. */
+  summary?: string | null;
+  /** "Why install this?" bullets, 1-3 expected. Empty when Tier B
+      hasn't been run for this token. */
+  useCases: string[];
+  /** Related package tokens, 3-5 expected. Each entry is a valid
+      Homebrew token (the backend filters hallucinations). Empty when
+      Tier B hasn't been run. */
+  similar: string[];
+  /** Tech-stack tags (lowercase, hyphenated). 3-8 expected. Empty when
+      Tier B hasn't been run. */
+  tags: string[];
+}
+
+/**
+ * Full payload of `enrichment_data`. `entries` maps token →
+ * EnrichmentEntry. The bundled placeholder ships with an empty entries
+ * map; the UI renders no enriched content until a real enrichment
+ * bundle (produced by `tools/enrich/enrich.py`) is in place.
+ */
+export interface EnrichmentData {
+  version: string;
+  generatedAt: string;
+  model: string;
+  /** Which tiers have been baked in. Possible values: `"A"`, `"B"`. */
+  tiers: string[];
+  entries: Record<string, EnrichmentEntry>;
+}
+
+// =========================================================
 // 2.9.3 Services (brew services)
 // =========================================================
 
@@ -341,6 +390,11 @@ export interface Settings {
       by default; the user opts in via Settings → GitHub. Independent
       of sign-in (anonymous probes still get the 60/hr public limit). */
   githubEnabled: boolean;
+  /** Phase 13 — master AI Features toggle. When false, ALL AI-derived
+      data is hidden in the UI: categories (Phase 9), enrichment
+      (Phase 13), donut chart, category pills, friendly names,
+      summaries, use cases, similar packages, tags. Default true. */
+  aiFeaturesEnabled: boolean;
 }
 
 /** Defaults matching the Rust `Settings::default()`. Used when seeding
@@ -355,6 +409,9 @@ export const SETTINGS_DEFAULTS: Settings = {
   // Phase 12c — anonymous GitHub stats opt-in. Off by default per the
   // "zero outbound unless user consented" posture.
   githubEnabled: false,
+  // Phase 13 — AI-enriched rendering. ON by default so users get the
+  // friendly names, summaries, and categories out of the box.
+  aiFeaturesEnabled: true,
 };
 
 // =========================================================
@@ -431,6 +488,17 @@ export type DeviceFlowPoll =
   | { kind: "approved"; username: string | null; scopes: string[] }
   | { kind: "denied" }
   | { kind: "expired" };
+
+/**
+ * Result of `githubCreateIssue` — the freshly-minted issue's number
+ * and canonical `html_url`. Returned by the create-issue backend
+ * command (Phase 12f). The frontend opens `htmlUrl` via `safeOpenUrl`
+ * after a successful submission.
+ */
+export interface CreatedIssue {
+  number: number;
+  htmlUrl: string;
+}
 
 // =========================================================
 // 3.3 Error model

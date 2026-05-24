@@ -107,7 +107,10 @@
       </div>
     {/if}
 
-    {#if discover.hasFilter}
+    <!-- Phase 13: chip bar hidden when the AI Features toggle is off
+         (categories are LLM-generated). Search results below still
+         render normally because they don't depend on categories. -->
+    {#if categories.visible && discover.hasFilter}
       <div class="chip-bar" aria-label="Active category filters">
         {#each [...discover.selectedCategories] as slug (slug)}
           {@const Icon = resolveCategoryIcon(
@@ -163,8 +166,9 @@
           </li>
         {/each}
       </ul>
-    {:else if discover.hasFilter}
-      <!-- Chip-filtered browse mode -->
+    {:else if categories.visible && discover.hasFilter}
+      <!-- Chip-filtered browse mode. Phase 13: hidden when AI toggle off
+           (no categories means no chip filter UI). -->
       <div class="cat-header">
         <h2>{browseTitle}</h2>
         <span class="text-muted">{fmt(browseItems.length)} packages</span>
@@ -189,14 +193,15 @@
           {/each}
         </ul>
       {/if}
-    {:else if categories.loading && categories.tiles.length === 0}
+    {:else if categories.visible && categories.loading && categories.tiles.length === 0}
       <LoadingState rows={4} label="Loading categories…" />
-    {:else if categories.error}
+    {:else if categories.visible && categories.error}
       <EmptyState title="Categories unavailable" body={categories.error}>
         {#snippet icon()}<SearchIcon size={48} />{/snippet}
       </EmptyState>
-    {:else}
-      <!-- Default: category tile grid -->
+    {:else if categories.visible}
+      <!-- Default: category tile grid. Phase 13: hidden when AI toggle
+           off. The empty state below covers the toggled-off case. -->
       <div class="cat-intro">
         <p class="text-muted">
           Browse {fmt(
@@ -220,6 +225,15 @@
           </button>
         {/each}
       </div>
+    {:else}
+      <!-- Phase 13: AI features off — invite the user to search since
+           the category tile grid is hidden. -->
+      <EmptyState
+        title="Type a query to search the Homebrew index"
+        body="Category browsing is hidden because AI features are turned off in Settings &rarr; Appearance."
+      >
+        {#snippet icon()}<SearchIcon size={48} />{/snippet}
+      </EmptyState>
     {/if}
   </div>
 </section>

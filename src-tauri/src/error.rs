@@ -95,22 +95,20 @@ pub enum BrewError {
     KeychainUnavailable { message: String },
 
     /// An authenticated GitHub action was attempted without a stored
-    /// token. The frontend should route this to the "Sign in" CTA.
-    ///
-    /// Currently emitted only by tests; Phase 12f wires it into the
-    /// star/issue/watch commands so the typed error reaches the
-    /// frontend instead of an opaque 401.
-    #[allow(dead_code)]
+    /// token. The frontend routes this to the "Sign in" CTA in
+    /// Settings → GitHub. Emitted by the Phase 12f authed commands
+    /// (`github_star`, `github_create_issue`, …) when the keychain
+    /// has no `github_access_token` entry.
     #[error("github authentication required")]
     AuthRequired,
 
     /// An authenticated GitHub action requires an OAuth scope the
     /// stored token doesn't carry. Surfaces the missing scope so the
     /// frontend can prompt a re-sign-in with the expanded scope set.
-    ///
-    /// Currently emitted only by tests; Phase 12f wires it into the
-    /// authed commands.
-    #[allow(dead_code)]
+    /// Emitted by the Phase 12f authed commands when the cached
+    /// `KEYCHAIN_ACCOUNT_SCOPES` list omits the required scope (e.g.
+    /// `public_repo`), so the frontend can route the user to Settings
+    /// → GitHub for a re-grant before any network attempt.
     #[error("github scope required: {scope}")]
     ScopeRequired { scope: String },
 }

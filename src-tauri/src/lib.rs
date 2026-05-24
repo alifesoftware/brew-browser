@@ -7,6 +7,7 @@
 mod brew;
 mod catalog;
 mod commands;
+mod enrichment;
 mod error;
 mod github;
 mod state;
@@ -85,6 +86,8 @@ pub fn run() {
             catalog_formulae_summary,
             catalog_casks_summary,
             categories_data,
+            enrichment_data,
+            enrichment_lookup,
             disk_usage,
             disk_usage_clear_cache,
             open_in_finder,
@@ -101,6 +104,12 @@ pub fn run() {
             github_signin_start,
             github_signin_poll,
             github_signout,
+            github_star,
+            github_unstar,
+            github_is_starred,
+            github_watch,
+            github_unwatch,
+            github_create_issue,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -91,6 +91,27 @@ pub struct Settings {
     /// short-circuits to `Ok(None)` when this is false — before any
     /// outbound call. Paranoid mode overrides this regardless.
     pub github_enabled: bool,
+
+    /// Phase 13 — master AI Features toggle. When false, ALL AI-derived
+    /// data is hidden in the UI: categories (Phase 9), enrichment (Phase
+    /// 13), donut chart, category pills, enriched summaries, use-cases,
+    /// similar packages, tags. Default **true** so users who opt in to
+    /// brew-browser get the enriched experience by default; the toggle
+    /// lives in Settings → Appearance for users who prefer brew's
+    /// native metadata only.
+    ///
+    /// This is a *rendering* gate — the enrichment payload is bundled
+    /// into the binary regardless, so toggling this on/off doesn't
+    /// trigger any I/O, network, or LLM calls.
+    #[serde(default = "default_ai_features_enabled")]
+    pub ai_features_enabled: bool,
+}
+
+/// Default factory for [`Settings::ai_features_enabled`] — separated
+/// out so `#[serde(default = "…")]` can pick it up for forward-compat
+/// on settings.json files written before Phase 13.
+fn default_ai_features_enabled() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -105,6 +126,10 @@ impl Default for Settings {
             // are opt-in so first-launch posture stays "zero outbound
             // beyond what the user has already consented to".
             github_enabled: false,
+            // On by default per Phase 13 plan: AI-enriched rendering is
+            // a value-add the project wants to show off out of the box.
+            // Toggling off reverts the UI to brew's native metadata only.
+            ai_features_enabled: default_ai_features_enabled(),
         }
     }
 }
@@ -481,6 +506,7 @@ mod tests {
             cask_icon_mode: CaskIconMode::InstalledOnly,
             trending_ttl_minutes: 120,
             github_enabled: true,
+            ai_features_enabled: false,
         };
         let written = persist(tmp.path(), s.clone()).await.expect("persist");
         assert_eq!(written, s);
@@ -536,6 +562,7 @@ mod tests {
             cask_icon_mode: CaskIconMode::All,
             trending_ttl_minutes: 1, // below the 5-minute floor
             github_enabled: false,
+            ai_features_enabled: true,
         };
         let written = persist(tmp.path(), s).await.expect("persist");
         assert_eq!(written.catalog_stale_banner_days, Settings::CATALOG_STALE_DAYS_MAX);
@@ -625,7 +652,50 @@ mod tests {
                 // `github_enabled` was added in 12c — must default to false
                 // for forward compat with pre-12c settings files.
                 assert!(!s.github_enabled);
+                // `ai_features_enabled` was added in Phase 13 — must
+                // default to true for forward compat with pre-13 settings
+                // files (pre-existing installs see categories + enrichment
+                // turned on as soon as they upgrade).
+                assert!(s.ai_features_enabled);
             }
+            other => panic!("expected Loaded, got {other:?}"),
+        }
+    }
+
+    /// Phase 13 — `ai_features_enabled` defaults to true.
+    #[test]
+    fn ai_features_enabled_defaults_to_true() {
+        let s = Settings::default();
+        assert!(s.ai_features_enabled, "AI features ON by default per Phase 13 plan");
+    }
+
+    /// Phase 13 — `ai_features_enabled` round-trips on the wire as
+    /// camelCase `aiFeaturesEnabled`. Pin the wire shape so a future
+    /// serde rename doesn't silently break the frontend store.
+    #[tokio::test]
+    async fn ai_features_enabled_round_trips_with_camel_case_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let s = Settings {
+            ai_features_enabled: false,
+            ..Settings::default()
+        };
+        persist(tmp.path(), s.clone()).await.expect("persist");
+
+        let raw = tokio::fs::read_to_string(settings_path(tmp.path()))
+            .await
+            .expect("read raw");
+        assert!(
+            raw.contains("\"aiFeaturesEnabled\""),
+            "expected camelCase key in raw JSON, got: {raw}"
+        );
+        assert!(
+            !raw.contains("\"ai_features_enabled\""),
+            "must not emit snake_case key"
+        );
+
+        let reloaded = load_async(tmp.path()).await;
+        match reloaded {
+            SettingsLoadState::Loaded(loaded) => assert!(!loaded.ai_features_enabled),
             other => panic!("expected Loaded, got {other:?}"),
         }
     }

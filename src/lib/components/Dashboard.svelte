@@ -11,6 +11,9 @@
   import LoadingState from "./LoadingState.svelte";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Star from "@lucide/svelte/icons/star";
+  import GitBranch from "@lucide/svelte/icons/git-branch";
+  import Loader from "@lucide/svelte/icons/loader-2";
   import { packages } from "$lib/stores/packages.svelte";
   import { env } from "$lib/stores/env.svelte";
   import { categories } from "$lib/stores/categories.svelte";
@@ -18,6 +21,8 @@
   import { discover } from "$lib/stores/discover.svelte";
   import { library } from "$lib/stores/library.svelte";
   import { activity } from "$lib/stores/activity.svelte";
+  import { github } from "$lib/stores/github.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import { brewUpgrade, diskUsage, diskUsageClearCache, openInFinder } from "$lib/api";
   import { toast } from "$lib/stores/toast.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
@@ -56,6 +61,53 @@
     categories.ensureLoaded();
     loadDisk();
   });
+
+  // ────────────────────────────────────────────────────────────────
+  // Phase 12f — personal-stats card
+  //
+  // Only meaningful when (a) the user is signed in to GitHub, (b) the
+  // Settings → GitHub toggle is on (the IPC short-circuits otherwise),
+  // and (c) paranoid mode is off. The store's `batchIsStarred` does
+  // the bounded fan-out via a 50-permit semaphore; we kick it off
+  // once the package list is loaded so we have homepages to probe.
+
+  /** Installed packages that have a parseable github.com homepage. */
+  let installedGithubHomepages = $derived.by<string[]>(() => {
+    if (!packages.all || packages.all.length === 0) return [];
+    return packages.all
+      .map((p) => p.homepage ?? "")
+      .filter((hp) =>
+        /^https?:\/\/github\.com\/[^/]+\/[^/?#]+/i.test(hp.trim()),
+      );
+  });
+
+  let personalStatsEligible = $derived(
+    !!github.status?.signedIn &&
+      settings.effective.githubEnabled &&
+      !settings.effective.paranoidMode,
+  );
+
+  let personalStatsLoading = $derived(github.starredBatchLoading);
+
+  /** Trigger the batch probe once we have homepages + the user is signed
+      in. Re-runs whenever the eligible homepage list grows. The store
+      caches per homepage so subsequent re-renders don't re-fetch. */
+  $effect(() => {
+    if (!personalStatsEligible) return;
+    if (installedGithubHomepages.length === 0) return;
+    void github.batchIsStarred(installedGithubHomepages);
+  });
+
+  /** Count of homepages whose cached outcome is exactly `true`. */
+  let personalStarredCount = $derived.by(() => {
+    let n = 0;
+    for (const hp of installedGithubHomepages) {
+      if (github.starredCache.get(hp) === true) n += 1;
+    }
+    return n;
+  });
+
+  let personalGithubTotal = $derived(installedGithubHomepages.length);
 
   function fmtBytes(b: number): string {
     if (b < 1024) return `${b} B`;
@@ -380,8 +432,52 @@
         </div>
       </section>
 
-      <!-- Top categories — donut -->
-      {#if categorySegments.length > 0}
+      <!-- Phase 12f — GitHub personal-stats card. Only when signed in,
+           toggle enabled, and paranoid mode off. Hidden entirely
+           otherwise so signed-out users see nothing about it. -->
+      {#if personalStatsEligible}
+        <section class="card">
+          <div class="card-head">
+            <h2><span class="gh-card-icon"><GitBranch size={16} /></span> GitHub</h2>
+            {#if github.status?.username}
+              <span class="text-muted gh-handle">@{github.status.username}</span>
+            {/if}
+          </div>
+          <div class="gh-card-body">
+            {#if personalGithubTotal === 0}
+              <p class="text-muted">
+                None of your installed packages have a GitHub homepage.
+              </p>
+            {:else if personalStatsLoading && personalStarredCount === 0}
+              <div class="gh-loading">
+                <Loader size={14} class="spin-slow" />
+                <span>Checking which of your {personalGithubTotal} packages you've starred…</span>
+              </div>
+            {:else}
+              <p class="gh-line">
+                <Star size={14} class="gh-line-icon" fill="currentColor" />
+                <span>
+                  You've starred
+                  <strong>{personalStarredCount}</strong>
+                  of
+                  <strong>{personalGithubTotal}</strong>
+                  installed packages with GitHub homepages.
+                </span>
+              </p>
+              {#if personalStatsLoading}
+                <p class="gh-line-sub">
+                  <Loader size={12} class="spin-slow" />
+                  <span>Refreshing…</span>
+                </p>
+              {/if}
+            {/if}
+          </div>
+        </section>
+      {/if}
+
+      <!-- Top categories — donut. Phase 13: hidden when the AI Features
+           toggle is off (categories are LLM-generated). -->
+      {#if categories.visible && categorySegments.length > 0}
         <section class="card">
           <div class="card-head">
             <h2>Top categories in your library</h2>
@@ -765,6 +861,54 @@
     padding: var(--space-3) var(--space-4);
     color: var(--color-text-secondary);
     font-size: var(--text-body-sm);
+  }
+
+  /* ─── GitHub personal-stats card (Phase 12f) ──────────── */
+  .gh-card-icon {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin-right: 4px;
+    color: var(--color-text-secondary);
+  }
+  .gh-handle {
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+  }
+  .gh-card-body {
+    padding: var(--space-3) var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .gh-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-primary);
+    font-size: var(--text-body);
+  }
+  .gh-line strong {
+    font-variant-numeric: tabular-nums;
+    color: var(--color-brand);
+  }
+  .gh-line :global(.gh-line-icon) {
+    color: var(--color-brand);
+    flex: none;
+  }
+  .gh-line-sub {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--color-text-muted);
+    font-size: var(--text-body-sm);
+  }
+  .gh-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-muted);
+    font-size: var(--text-body);
   }
 
   /* ─── Error card ──────────────────────────────────────── */

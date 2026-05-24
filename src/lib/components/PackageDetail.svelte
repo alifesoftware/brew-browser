@@ -23,22 +23,34 @@
   import Loader from "@lucide/svelte/icons/loader-2";
   import AlertCircle from "@lucide/svelte/icons/alert-circle";
 
+  import MessageSquarePlus from "@lucide/svelte/icons/message-square-plus";
+  import EyeIcon from "@lucide/svelte/icons/eye";
+  import EyeOff from "@lucide/svelte/icons/eye-off";
+
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
   import { activity } from "$lib/stores/activity.svelte";
   import { toast } from "$lib/stores/toast.svelte";
   import { categories } from "$lib/stores/categories.svelte";
   import { discover } from "$lib/stores/discover.svelte";
+  import { enrichment } from "$lib/stores/enrichment.svelte";
   import { services } from "$lib/stores/services.svelte";
   import { settings } from "$lib/stores/settings.svelte";
-  import { github, type RepoStatsOutcome } from "$lib/stores/github.svelte";
-  import { brewInfo, brewInstall, brewUninstall, brewUpgrade } from "$lib/api";
+  import { env } from "$lib/stores/env.svelte";
+  import { github, type RepoStatsOutcome, type StarredOutcome } from "$lib/stores/github.svelte";
+  import { brewInfo, brewInstall, brewUninstall, brewUpgrade, appVersion } from "$lib/api";
   import { safeOpenUrl } from "$lib/util/url";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
-  import { isBrewError, normalizeServiceStatus, type IconSource, type PackageDetail } from "$lib/types";
+  import IssueModal from "./IssueModal.svelte";
+  import Sparkles from "@lucide/svelte/icons/sparkles";
+  import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail } from "$lib/types";
 
   // Categories file is small; ensure it's loaded so the pills can render. Idempotent.
   categories.ensureLoaded();
+  // Phase 13: enrichment bundle is also small (< 5 MiB) and only parses
+  // once; lazy-load on detail open so it's ready by the time the user
+  // scrolls. Idempotent — the store guards duplicate fetches.
+  enrichment.ensureLoaded();
 
   // Small transparency label for the meta row — keeps "where did this come from?"
   // visible without painting a whole section. Skips into a tooltip for the
@@ -210,6 +222,83 @@
     return categories.categoriesOf(pkg.name, pkg.kind);
   });
 
+  // ────────────────────────────────────────────────────────────────
+  // Phase 13 — LLM-enriched metadata.
+  //
+  // `enriched` is null when EITHER the AI Features toggle is off OR
+  // the bundled enrichment.json.gz is the placeholder (no real
+  // enrichment baked in yet) OR this token has no entry. Components
+  // gate on `enriched && enriched.<field>` (or `enriched.<field>?.length > 0`
+  // for arrays) before painting any AI-derived UI.
+  let enriched = $derived<EnrichmentEntry | null>(
+    pkg ? enrichment.lookup(pkg.name) : null,
+  );
+
+  /** Open the "Wrong?" issue against msitarzewski/brew-browser for an
+   *  enriched field. Title + body are tailored per field so the user
+   *  doesn't have to retype context. Signed-in users get the in-app
+   *  modal; everyone else gets a deeplink with URL-encoded params. */
+  async function openWrongEnrichedIssue(field: "summary" | "friendly_name" | "use_cases" | "similar" | "tags") {
+    if (!pkg) return;
+    const ver = await ensureAppVersion();
+    const fieldLabels: Record<typeof field, string> = {
+      summary: "Summary",
+      friendly_name: "Friendly name",
+      use_cases: "Use cases",
+      similar: "Similar packages",
+      tags: "Tags",
+    };
+    const label = fieldLabels[field];
+    const current = (() => {
+      if (!enriched) return "(none)";
+      switch (field) {
+        case "summary":       return enriched.summary || "(none)";
+        case "friendly_name": return enriched.friendlyName || "(none)";
+        case "use_cases":     return enriched.useCases.join(" · ") || "(none)";
+        case "similar":       return enriched.similar.join(", ") || "(none)";
+        case "tags":          return enriched.tags.join(", ") || "(none)";
+      }
+    })();
+    const title = `Wrong ${label.toLowerCase()} for ${pkg.name}`;
+    const body = [
+      `**Package:** ${pkg.name} (${pkg.kind})`,
+      `**Field:** ${label}`,
+      `**Currently:** ${current}`,
+      `**Suggestion:** _your suggested ${label.toLowerCase()}_`,
+      "",
+      "---",
+      `*Reported via brew-browser v${ver} on macOS (Homebrew ${env.report?.version ?? "unknown"})*`,
+    ].join("\n");
+
+    if (githubSignedIn) {
+      issueTargetHomepage = "https://github.com/msitarzewski/brew-browser";
+      issueTargetRepo = { owner: "msitarzewski", repo: "brew-browser" };
+      issueInitialTitle = title;
+      issueInitialBody = body;
+      issueInitialLabels = ["enrichment-suggestion"];
+      issueOpen = true;
+    } else {
+      const params = new URLSearchParams();
+      params.set("title", title);
+      params.set("body", body);
+      params.set("labels", "enrichment-suggestion");
+      const url = `https://github.com/msitarzewski/brew-browser/issues/new?${params.toString()}`;
+      await safeOpenUrl(url);
+    }
+  }
+
+  /** Jump to PackageDetail for a sibling token (used by "Similar packages"
+   *  pills). Currently the catalog doesn't carry kind for an arbitrary
+   *  token, so we infer from packages.isInstalled() when available, else
+   *  default to formula (the common case). The PackageDetail panel will
+   *  re-fetch `brew info` and pick up the actual kind from there. */
+  function openSimilar(token: string) {
+    // Try to pull the real kind from the loaded packages list first.
+    const installed = packages.all.find((p) => p.name === token);
+    const kind = installed?.kind ?? "formula";
+    ui.selectPackage(token, kind);
+  }
+
   /**
    * Jump to Discover with a category chip pre-selected. Closes the detail panel
    * so the user lands on the filtered view, not an obscured one.
@@ -301,6 +390,180 @@
     return new Date(resetAt * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
+  // ────────────────────────────────────────────────────────────────
+  // Phase 12f — authed actions (star, watch, file issue) + "Wrong?"
+  //
+  // Visible only when the user is signed in to GitHub via Settings →
+  // GitHub. Backend gates: paranoid-mode → URL allowlist → auth →
+  // scope (`public_repo`) → action. Errors surface as typed BrewErrors
+  // and toast with a friendly message.
+
+  /** True when the current package's homepage is a GitHub URL AND
+      the user is signed in. Anonymous users see a hint instead of the
+      action row. */
+  let githubSignedIn = $derived(!!github.status?.signedIn);
+  let githubActionsEligible = $derived(githubStatsEligible && githubSignedIn);
+
+  /** Per-row starred outcome from the shared cache. */
+  let starredState = $state<StarredOutcome>("unknown");
+
+  $effect(() => {
+    // Reset and refetch whenever the homepage changes.
+    const hp = pkg?.homepage;
+    if (!hp || !githubActionsEligible) {
+      starredState = "unknown";
+      return;
+    }
+    starredState = github.starredCache.get(hp) ?? "unknown";
+    if (starredState === "unknown") {
+      void github.isStarred(hp).then((result) => {
+        // Only update if we're still on the same package.
+        if (pkg?.homepage === hp) {
+          starredState = result;
+        }
+      });
+    }
+  });
+
+  /** True while a toggle-star IPC is in flight (per current package).
+      The button disables itself during the call so a double-click can't
+      fire two opposite IPCs. */
+  let starToggling = $state(false);
+
+  async function onToggleStar() {
+    if (!pkg?.homepage || starToggling) return;
+    starToggling = true;
+    const hp = pkg.homepage;
+    try {
+      const target = await github.toggleStar(hp);
+      if (target === true) toast.success(`Starred ${pkg.name}`);
+      else if (target === false) toast.success(`Unstarred ${pkg.name}`);
+      starredState = github.starredCache.get(hp) ?? "unknown";
+    } catch (e) {
+      toast.error("Couldn't update star", isBrewError(e) ? brewErrorMessage(e) : String(e));
+    } finally {
+      starToggling = false;
+    }
+  }
+
+  let watchPending = $state(false);
+  /** Watch state isn't tracked persistently (the API to read it is
+      cheap but not yet wired). For v1 we just expose the on-demand
+      toggle and rely on optimistic feedback. */
+  let watching = $state<boolean | null>(null);
+
+  async function onToggleWatch() {
+    if (!pkg?.homepage || watchPending) return;
+    watchPending = true;
+    const want = !watching;
+    try {
+      if (want) await github.watch(pkg.homepage);
+      else await github.unwatch(pkg.homepage);
+      watching = want;
+      toast.success(want ? `Watching ${pkg.name}` : `Stopped watching ${pkg.name}`);
+    } catch (e) {
+      toast.error("Couldn't update watch", isBrewError(e) ? brewErrorMessage(e) : String(e));
+    } finally {
+      watchPending = false;
+    }
+  }
+
+  // ── Issue modal state ──
+  //
+  // We use a single IssueModal instance with swappable props because
+  // both the "File issue" button and the "Wrong?" link share the
+  // form. The `issueTarget` determines which repo to file against
+  // and what to prefill.
+
+  let issueOpen = $state(false);
+  let issueTargetHomepage = $state("");
+  let issueTargetRepo = $state<{ owner: string; repo: string }>({ owner: "", repo: "" });
+  let issueInitialTitle = $state("");
+  let issueInitialBody = $state("");
+  let issueInitialLabels = $state<string[]>([]);
+
+  /** Cached app version for the issue body footer. Loaded lazily on
+      first issue open so we don't pay for it on every package open. */
+  let cachedAppVersion = $state<string | null>(null);
+  async function ensureAppVersion(): Promise<string> {
+    if (cachedAppVersion !== null) return cachedAppVersion;
+    try {
+      cachedAppVersion = await appVersion();
+    } catch {
+      cachedAppVersion = "unknown";
+    }
+    return cachedAppVersion!;
+  }
+
+  async function openPackageIssue() {
+    if (!pkg?.homepage) return;
+    const repoInfo = githubRepoFromHomepage(pkg.homepage);
+    if (!repoInfo) return;
+    const ver = await ensureAppVersion();
+    issueTargetHomepage = pkg.homepage;
+    issueTargetRepo = repoInfo;
+    issueInitialTitle = `[brew-browser] ${pkg.name}: `;
+    issueInitialBody = [
+      `**Package:** ${pkg.name} (${pkg.kind})`,
+      `**brew-browser version:** ${ver}`,
+      `**Homebrew version:** ${env.report?.version ?? "unknown"}`,
+      "",
+      "---",
+      "",
+      "Describe the issue here.",
+    ].join("\n");
+    issueInitialLabels = [];
+    issueOpen = true;
+  }
+
+  /** Open the "Wrong?" issue against msitarzewski/brew-browser. */
+  async function openWrongCategoryIssue() {
+    if (!pkg) return;
+    const ver = await ensureAppVersion();
+    const currentCats = pkgCategories
+      .map((slug) => categories.labelOf(slug))
+      .join(", ") || "(none)";
+    const body = [
+      `**Package:** ${pkg.name} (${pkg.kind})`,
+      `**Currently tagged:** ${currentCats}`,
+      `**Suggestion:** _your suggested categories_`,
+      "",
+      "---",
+      `*Reported via brew-browser v${ver} on macOS (Homebrew ${env.report?.version ?? "unknown"})*`,
+    ].join("\n");
+    const title = `Wrong categories for ${pkg.name}`;
+
+    if (githubSignedIn) {
+      // In-app modal targeting the brew-browser repo.
+      issueTargetHomepage = "https://github.com/msitarzewski/brew-browser";
+      issueTargetRepo = { owner: "msitarzewski", repo: "brew-browser" };
+      issueInitialTitle = title;
+      issueInitialBody = body;
+      issueInitialLabels = ["category-suggestion"];
+      issueOpen = true;
+    } else {
+      // Deeplink fallback. URL-encode every user-influenced segment via
+      // encodeURIComponent (NOT manual string interpolation) per the
+      // §12f review.
+      const params = new URLSearchParams();
+      params.set("title", title);
+      params.set("body", body);
+      params.set("labels", "category-suggestion");
+      const url = `https://github.com/msitarzewski/brew-browser/issues/new?${params.toString()}`;
+      await safeOpenUrl(url);
+    }
+  }
+
+  /** Extract (owner, repo) from a GitHub homepage string for the
+      issue modal's header. Returns null when the URL isn't strictly
+      a github.com/<owner>/<repo>. The backend's parser is
+      authoritative; this is just for display. */
+  function githubRepoFromHomepage(url: string): { owner: string; repo: string } | null {
+    const m = /^https?:\/\/github\.com\/([^/?#]+)\/([^/?#]+)/i.exec(url.trim());
+    if (!m) return null;
+    return { owner: m[1], repo: m[2].replace(/\.git$/i, "") };
+  }
+
   async function svcAct(action: "start" | "stop" | "restart") {
     if (!pkg) return;
     try {
@@ -320,7 +583,24 @@
   >
     <header>
       <div class="head-left">
-        <h1 bind:this={headingEl} tabindex="-1">{ui.selectedPackage.name}</h1>
+        <div class="title-stack">
+          <h1 bind:this={headingEl} tabindex="-1">{ui.selectedPackage.name}</h1>
+          {#if enriched?.friendlyName}
+            <!-- Phase 13: friendly name appears below the canonical
+                 token as a smaller subtitle. The "AI-enriched" suffix
+                 carries a tooltip explaining provenance. -->
+            <small
+              class="enriched-subtitle"
+              title="Generated at build time by Claude Haiku 4.5 — see Settings &rarr; Appearance to disable"
+            >
+              {enriched.friendlyName}
+              <span class="ai-badge">
+                <Sparkles size={10} aria-hidden="true" />
+                AI-enriched
+              </span>
+            </small>
+          {/if}
+        </div>
         <Pill tone={ui.selectedPackage.kind === "formula" ? "formula" : "cask"}>{ui.selectedPackage.kind}</Pill>
       </div>
       <button class="close" aria-label="Close detail panel" onclick={close} title="Close (Esc)">
@@ -361,7 +641,7 @@
             <dt>Icon source</dt>
             <dd class="icon-source" title={iconSourceTitle(pkg.iconSource)}>{iconSourceLabel(pkg.iconSource)}</dd>
           </div>
-          {#if pkgCategories.length > 0}
+          {#if categories.visible && pkgCategories.length > 0}
             <div>
               <dt>Categories</dt>
               <dd class="cat-pills">
@@ -379,10 +659,77 @@
                     <span>{categories.labelOf(slug)}</span>
                   </button>
                 {/each}
+                <!-- Phase 12f — "Wrong?" link files a category-suggestion
+                     issue against msitarzewski/brew-browser. Always
+                     visible regardless of sign-in: signed-in opens the
+                     in-app modal, signed-out deeplinks to the new-issue
+                     URL with URL-encoded params. -->
+                <button
+                  type="button"
+                  class="wrong-link"
+                  onclick={openWrongCategoryIssue}
+                  title={githubSignedIn
+                    ? "Suggest different categories for this package"
+                    : "Suggest different categories on GitHub"}
+                >
+                  Wrong?
+                </button>
+              </dd>
+            </div>
+          {/if}
+
+          <!-- Phase 13: enriched tags. Distinct from category pills above —
+               categories are coarse (19 slugs), tags are fine-grained
+               tech-stack labels (database, video-editing, kubernetes…). -->
+          {#if enriched && enriched.tags.length > 0}
+            <div>
+              <dt>Tags</dt>
+              <dd class="tag-pills">
+                {#each enriched.tags as t (t)}
+                  <span class="tag-pill" title="AI-enriched tag">
+                    <Tag size={10} aria-hidden="true" />
+                    <span>{t}</span>
+                  </span>
+                {/each}
+                <button
+                  type="button"
+                  class="wrong-link"
+                  onclick={() => openWrongEnrichedIssue("tags")}
+                  title={githubSignedIn
+                    ? "Suggest different tags for this package"
+                    : "Suggest different tags on GitHub"}
+                >
+                  Wrong?
+                </button>
               </dd>
             </div>
           {/if}
         </dl>
+
+        <!-- Phase 13: enriched summary, between the meta and the brew
+             native description. Both render when present; the brew
+             native description never disappears. -->
+        {#if enriched?.summary}
+          <blockquote class="enriched-summary">
+            <p>{enriched.summary}</p>
+            <span class="enriched-footer">
+              <span class="ai-badge" title="Generated at build time by Claude Haiku 4.5">
+                <Sparkles size={10} aria-hidden="true" />
+                AI-enriched
+              </span>
+              <button
+                type="button"
+                class="wrong-link"
+                onclick={() => openWrongEnrichedIssue("summary")}
+                title={githubSignedIn
+                  ? "Suggest a different summary for this package"
+                  : "Suggest a different summary on GitHub"}
+              >
+                Wrong?
+              </button>
+            </span>
+          </blockquote>
+        {/if}
 
         {#if pkg.description}
           <p class="desc">{pkg.description}</p>
@@ -393,6 +740,70 @@
             <span class="truncate">{pkg.homepage}</span>
             <ExternalLink size={12} />
           </button>
+        {/if}
+
+        <!-- Phase 13: "Why install this?" use-case bullets. -->
+        {#if enriched && enriched.useCases.length > 0}
+          <section class="enriched-section" aria-label="Use cases">
+            <h3>
+              Why install this?
+              <span class="ai-badge ai-badge-inline" title="Generated at build time by Claude Haiku 4.5">
+                <Sparkles size={10} aria-hidden="true" />
+                AI-enriched
+              </span>
+              <button
+                type="button"
+                class="wrong-link wrong-link-h3"
+                onclick={() => openWrongEnrichedIssue("use_cases")}
+                title={githubSignedIn
+                  ? "Suggest different use cases for this package"
+                  : "Suggest different use cases on GitHub"}
+              >
+                Wrong?
+              </button>
+            </h3>
+            <ul class="use-cases">
+              {#each enriched.useCases as uc (uc)}
+                <li>{uc}</li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+
+        <!-- Phase 13: Similar packages, clickable pills that re-open
+             PackageDetail for that token. -->
+        {#if enriched && enriched.similar.length > 0}
+          <section class="enriched-section" aria-label="Similar packages">
+            <h3>
+              Similar packages
+              <span class="ai-badge ai-badge-inline" title="Generated at build time by Claude Haiku 4.5">
+                <Sparkles size={10} aria-hidden="true" />
+                AI-enriched
+              </span>
+              <button
+                type="button"
+                class="wrong-link wrong-link-h3"
+                onclick={() => openWrongEnrichedIssue("similar")}
+                title={githubSignedIn
+                  ? "Suggest different related packages"
+                  : "Suggest different related packages on GitHub"}
+              >
+                Wrong?
+              </button>
+            </h3>
+            <div class="similar-pills">
+              {#each enriched.similar as token (token)}
+                <button
+                  type="button"
+                  class="similar-pill"
+                  onclick={() => openSimilar(token)}
+                  title={`Open ${token}`}
+                >
+                  {token}
+                </button>
+              {/each}
+            </div>
+          </section>
         {/if}
 
         {#if githubOutcome}
@@ -460,6 +871,66 @@
               </div>
             {/if}
             <!-- kind === "miss" renders nothing -->
+
+            <!-- Phase 12f — authed actions row. Only paint when the
+                 stats card itself rendered (so non-GitHub homepages
+                 and paranoid-blocked rows stay quiet) AND the user is
+                 signed in. -->
+            {#if githubActionsEligible && pkg?.homepage}
+              <div class="gh-actions">
+                <button
+                  type="button"
+                  class="gh-action"
+                  class:active={starredState === true}
+                  onclick={onToggleStar}
+                  disabled={starToggling || starredState === "unknown"}
+                  title={starredState === true
+                    ? "Unstar this repository"
+                    : starredState === false
+                      ? "Star this repository"
+                      : "Loading starred state…"}
+                >
+                  <Star
+                    size={14}
+                    fill={starredState === true ? "currentColor" : "none"}
+                  />
+                  <span>
+                    {#if starredState === true}Starred{:else if starredState === false}Star{:else}Star{/if}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  class="gh-action"
+                  class:active={watching === true}
+                  onclick={onToggleWatch}
+                  disabled={watchPending}
+                  title={watching === true ? "Stop watching" : "Watch for activity"}
+                >
+                  {#if watching === true}
+                    <EyeIcon size={14} />
+                    <span>Watching</span>
+                  {:else}
+                    <EyeOff size={14} />
+                    <span>Watch</span>
+                  {/if}
+                </button>
+
+                <button
+                  type="button"
+                  class="gh-action"
+                  onclick={openPackageIssue}
+                  title={`File an issue against ${githubRepoFromHomepage(pkg.homepage)?.owner ?? ""}/${githubRepoFromHomepage(pkg.homepage)?.repo ?? ""}`}
+                >
+                  <MessageSquarePlus size={14} />
+                  <span>File issue</span>
+                </button>
+              </div>
+            {:else if githubStatsEligible && !githubSignedIn}
+              <p class="gh-signin-hint">
+                Sign in via Settings &rarr; GitHub to star, watch, or file issues.
+              </p>
+            {/if}
           </section>
         {/if}
 
@@ -579,6 +1050,16 @@
   >
     <p>This will remove <strong>{ui.selectedPackage.name}</strong> from your system.</p>
   </DestructiveConfirm>
+
+  <IssueModal
+    open={issueOpen}
+    title={issueInitialTitle}
+    body={issueInitialBody}
+    labels={issueInitialLabels}
+    repo={issueTargetRepo}
+    homepage={issueTargetHomepage}
+    onClose={() => (issueOpen = false)}
+  />
 {/if}
 
 <style>
@@ -867,6 +1348,220 @@
     color: var(--color-text-muted);
     font-size: var(--text-body-sm);
   }
+
+  /* ── Phase 12f authed-actions row ── */
+  .gh-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-top: 6px;
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border);
+  }
+  .gh-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px var(--space-2);
+    height: 26px;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    font-size: var(--text-body-sm);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+  .gh-action:not(:disabled):hover {
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
+    border-color: var(--color-accent);
+  }
+  .gh-action.active {
+    color: var(--color-brand);
+    border-color: var(--color-brand);
+  }
+  .gh-action.active:not(:disabled):hover {
+    background: var(--color-brand-subtle, rgba(245, 158, 11, 0.08));
+  }
+  .gh-action:disabled { opacity: 0.5; cursor: default; }
+
+  .gh-signin-hint {
+    margin-top: 6px;
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--color-border);
+    color: var(--color-text-muted);
+    font-size: var(--text-body-sm);
+  }
+
+  /* "Wrong?" link on the Categories row — small, inline, plain. */
+  .wrong-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--space-2);
+    height: 20px;
+    color: var(--color-text-muted);
+    font-size: var(--text-caption);
+    font-weight: var(--fw-medium);
+    background: transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color 0.12s ease, background 0.12s ease;
+  }
+  .wrong-link:hover {
+    color: var(--color-text-link);
+    background: var(--color-surface-sunken);
+    text-decoration: underline;
+  }
+  .wrong-link:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* ── Phase 13 — enriched metadata visuals ── */
+
+  /* Subtitle stack under the package token in the header. */
+  .title-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .enriched-subtitle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-body-sm);
+    color: var(--color-text-secondary);
+    cursor: help;
+  }
+
+  /* "AI-enriched" badge — small, inline, semantic. */
+  .ai-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    height: 16px;
+    border-radius: var(--radius-full);
+    background: var(--color-brand-subtle, rgba(245, 158, 11, 0.12));
+    color: var(--color-brand, var(--color-accent));
+    font-size: 10px;
+    font-weight: var(--fw-medium);
+    line-height: 1;
+    flex: none;
+  }
+  .ai-badge-inline {
+    margin-left: var(--space-2);
+    vertical-align: middle;
+  }
+
+  /* Enriched summary blockquote — between meta dl and brew desc. */
+  .enriched-summary {
+    margin: 0;
+    padding: var(--space-3);
+    border-left: 3px solid var(--color-brand, var(--color-accent));
+    background: var(--color-surface-sunken);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    color: var(--color-text-primary);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .enriched-summary p {
+    margin: 0;
+    line-height: var(--lh-normal);
+    overflow-wrap: anywhere;
+  }
+  .enriched-footer {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* Use cases + similar sections share a heading style. */
+  .enriched-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .enriched-section h3 {
+    font-size: var(--text-h3);
+    font-weight: var(--fw-semibold);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .wrong-link-h3 {
+    margin-left: auto;
+  }
+
+  .use-cases {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: var(--space-4);
+    color: var(--color-text-secondary);
+    font-size: var(--text-body-sm);
+    list-style: disc;
+  }
+  .use-cases li { line-height: var(--lh-normal); }
+
+  .similar-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .similar-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px var(--space-2);
+    height: 20px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-sunken);
+    color: var(--color-text-secondary);
+    font-size: var(--text-caption);
+    font-weight: var(--fw-medium);
+    line-height: 1;
+    cursor: pointer;
+    font-family: var(--font-mono, inherit);
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .similar-pill:hover {
+    background: var(--color-brand-subtle, rgba(245, 158, 11, 0.08));
+    border-color: var(--color-brand, var(--color-accent));
+    color: var(--color-text-primary);
+  }
+  .similar-pill:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Tags — small ghost-style pills, distinct from category pills. */
+  .tag-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+  }
+  .tag-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    height: 18px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    font-size: 10px;
+    font-weight: var(--fw-medium);
+    line-height: 1;
+  }
+
   :global(.spin-slow) {
     animation: spin 1.5s linear infinite;
   }

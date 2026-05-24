@@ -22,6 +22,7 @@ use crate::commands::categories::CategoriesData;
 use crate::commands::disk_usage::CachedDiskUsage;
 use crate::commands::services::CachedServices;
 use crate::commands::settings::{self, SettingsLoadState};
+use crate::enrichment::EnrichmentData;
 use crate::error::BrewError;
 use crate::trending::cache::TrendingCache;
 use crate::types::{BrewEnvironment, PackageList};
@@ -88,6 +89,12 @@ pub struct AppState {
     /// on the first `categories_data` invocation. The JSON itself is baked
     /// into the binary via `include_str!`, so this is purely a parse cache.
     pub categories_cache: Arc<Mutex<Option<Arc<CategoriesData>>>>,
+
+    /// Parsed `enrichment.json.gz` payload (Phase 13), memoised across
+    /// calls. Filled lazily on the first `enrichment_data` invocation.
+    /// The gzip stream is baked into the binary via `include_bytes!`, so
+    /// this is purely a decode+parse cache.
+    pub enrichment_cache: Arc<Mutex<Option<Arc<EnrichmentData>>>>,
 
     /// Disk-usage report cache. Filled by `disk_usage`, invalidated by
     /// `disk_usage_clear_cache`. TTL is checked inside the command itself
@@ -193,6 +200,7 @@ impl AppState {
             app_data_dir,
             installed_cache: RwLock::new(None),
             categories_cache: Arc::new(Mutex::new(None)),
+            enrichment_cache: Arc::new(Mutex::new(None)),
             disk_usage_cache: Arc::new(Mutex::new(None)),
             services_cache: Arc::new(Mutex::new(None)),
             catalog: RwLock::new(Arc::new(bundled)),

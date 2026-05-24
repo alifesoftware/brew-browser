@@ -45,7 +45,10 @@
         )
       : base;
 
-    if (discover.hasFilter) {
+    // Phase 13: only apply the category filter when AI features are on.
+    // Toggling AI off silently disregards the chip selection (the chip
+    // bar is also hidden) so the user sees their full library again.
+    if (categories.visible && discover.hasFilter) {
       result = result.filter((p) => {
         const cats = categories.categoriesOf(p.name, p.kind);
         for (const c of cats) {
@@ -133,7 +136,9 @@
       {/each}
     </div>
 
-    {#if discover.hasFilter}
+    <!-- Phase 13: chip bar hidden when the AI Features toggle is off
+         (categories are LLM-generated). -->
+    {#if categories.visible && discover.hasFilter}
       <div class="chip-bar" aria-label="Active category filters">
         {#each [...discover.selectedCategories] as slug (slug)}
           {@const Icon = resolveCategoryIcon(
@@ -168,15 +173,19 @@
         {/snippet}
       </EmptyState>
     {:else if sorted.length === 0}
+      <!-- Phase 13: chip-filter messaging only matters when the AI toggle
+           is on (otherwise the chip bar isn't visible and the filter
+           isn't applied). Treat AI-off as "no chip filter active". -->
+      {@const chipFilterActive = categories.visible && discover.hasFilter}
       <EmptyState
         title={query
           ? `Nothing matches "${query}"`
-          : discover.hasFilter
+          : chipFilterActive
             ? "No installed packages in the selected categories."
             : "No packages installed."}
         body={query
           ? "Try a shorter or different term."
-          : discover.hasFilter
+          : chipFilterActive
             ? "Remove a chip or open Discover to find more."
             : "`brew install wget` would be a fine start. Or open Discover to look around."}
       >
@@ -184,7 +193,7 @@
         {#snippet cta()}
           {#if query}
             <Button variant="secondary" onclick={() => (query = "")}>Clear filter</Button>
-          {:else if discover.hasFilter}
+          {:else if chipFilterActive}
             <Button variant="secondary" onclick={() => discover.clear()}>Clear categories</Button>
           {:else}
             <Button variant="primary" onclick={() => ui.setSection("discover")}>Open Discover</Button>

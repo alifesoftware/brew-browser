@@ -24,9 +24,12 @@ import type {
   BrewfileSummary,
   BrewStreamEvent,
   CategoriesData,
+  CreatedIssue,
   DeviceFlowPoll,
   DeviceFlowStart,
   DiskUsageReport,
+  EnrichmentData,
+  EnrichmentEntry,
   GithubStatus,
   JobResult,
   OutdatedPackage,
@@ -248,6 +251,34 @@ export function categoriesData(): Promise<CategoriesData> {
 }
 
 // ============================================================
+// Phase 13 — enrichment (LLM-baked metadata, bundled at build time)
+// ============================================================
+
+/**
+ * Fetch the bundled `enrichment.json.gz` payload. The backend
+ * `include_bytes!`s the gzip stream and parses on first call, memoising
+ * on AppState. Returns a placeholder shape (empty entries map) when
+ * the build was made without running `tools/enrich/enrich.py` first.
+ *
+ * The frontend store (`enrichmentStore`) wraps this and adds the AI
+ * Features toggle gate; components should reach for the store, not
+ * this raw wrapper.
+ */
+export function enrichmentData(): Promise<EnrichmentData> {
+  return invoke<EnrichmentData>("enrichment_data");
+}
+
+/**
+ * Look up the enrichment entry for a single token. Returns `null` when
+ * the token isn't in the bundle (placeholder build, brand-new package,
+ * etc.). The backend validates the token against `validate_package_name`
+ * first so an IPC caller can't probe with shell metacharacters.
+ */
+export function enrichmentLookup(name: string): Promise<EnrichmentEntry | null> {
+  return invoke<EnrichmentEntry | null>("enrichment_lookup", { name });
+}
+
+// ============================================================
 // Dashboard — disk usage + Finder reveal
 // ============================================================
 
@@ -427,6 +458,81 @@ export function githubSigninPoll(deviceCode: string): Promise<DeviceFlowPoll> {
  */
 export function githubSignout(): Promise<void> {
   return invoke<void>("github_signout");
+}
+
+// ============================================================
+// Phase 12f — GitHub authed actions (star / watch / file issue)
+// ============================================================
+//
+// Every wrapper below talks to a backend command that runs the same
+// five-step gate chain before any network call: paranoid-mode → URL
+// allowlist → auth-required (Keychain) → scope-required (`public_repo`)
+// → action. Errors surface as typed `BrewErrorPayload`:
+//
+//   - `paranoid_mode_blocked` — Paranoid Mode is on; route to Settings.
+//   - `invalid_argument`      — `homepage` isn't a github.com/<o>/<r>.
+//   - `auth_required`         — no token in Keychain; sign in.
+//   - `scope_required`        — token lacks `public_repo`; re-grant.
+//   - `github_rate_limited`   — bucket exhausted; no retry, no backoff.
+
+/**
+ * Star the repo whose URL matches `homepage`. The backend validates
+ * the URL is `github.com/<owner>/<repo>` before any network call.
+ */
+export function githubStar(homepage: string): Promise<void> {
+  return invoke<void>("github_star", { homepage });
+}
+
+/**
+ * Unstar — idempotent on the GitHub side (unstarring a repo you
+ * weren't starring returns 204 too).
+ */
+export function githubUnstar(homepage: string): Promise<void> {
+  return invoke<void>("github_unstar", { homepage });
+}
+
+/**
+ * Check whether the signed-in user has starred `homepage`. Returns
+ * a boolean — backend maps 204 → true, 404 → false.
+ */
+export function githubIsStarred(homepage: string): Promise<boolean> {
+  return invoke<boolean>("github_is_starred", { homepage });
+}
+
+/**
+ * Watch the repo (`subscribed: true, ignored: false`). The GitHub
+ * UI calls this "All activity".
+ */
+export function githubWatch(homepage: string): Promise<void> {
+  return invoke<void>("github_watch", { homepage });
+}
+
+/** Stop watching — idempotent. */
+export function githubUnwatch(homepage: string): Promise<void> {
+  return invoke<void>("github_unwatch", { homepage });
+}
+
+/**
+ * File an issue against the repo. Backend sanitises and caps:
+ *   - title:  ≤ 256 chars, control chars stripped (except tab).
+ *   - body:   ≤ 64 KiB, null bytes stripped (markdown otherwise).
+ *   - labels: ≤ 10, each ≤ 50 chars matching `^[A-Za-z0-9_./-]+$`.
+ *
+ * Returns the new issue's `{ number, htmlUrl }` so the caller can
+ * `safeOpenUrl(result.htmlUrl)` to show the user the result.
+ */
+export function githubCreateIssue(
+  homepage: string,
+  title: string,
+  body: string,
+  labels: string[],
+): Promise<CreatedIssue> {
+  return invoke<CreatedIssue>("github_create_issue", {
+    homepage,
+    title,
+    body,
+    labels,
+  });
 }
 
 // ============================================================

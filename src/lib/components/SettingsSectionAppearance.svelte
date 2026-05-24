@@ -12,6 +12,7 @@
   import Monitor from "@lucide/svelte/icons/monitor";
 
   import { ui, VIBRANCY_MATERIALS, type VibrancyMaterial } from "$lib/stores/ui.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import type { SidebarSection, ThemePreference } from "$lib/types";
 
   /** Sections the user can pick as their default landing page. Mirrors the
@@ -35,6 +36,14 @@
     ui.setVibrancyMaterial(value);
   }
   function pickTheme(t: ThemePreference) { ui.setTheme(t); }
+
+  // Phase 13 — AI Features master toggle. Saved through the persisted
+  // Settings store (settings.json), not localStorage, so it survives
+  // reinstalls and matches the rest of the settings.json surface.
+  async function onAiFeaturesChange(e: Event) {
+    const checked = (e.currentTarget as HTMLInputElement).checked;
+    await settings.save({ aiFeaturesEnabled: checked });
+  }
 </script>
 
 <div class="section">
@@ -107,6 +116,32 @@
     <p class="hint">Requires app restart to take effect. The default
       (HudWindow) matches the rest of macOS.</p>
   </div>
+
+  <div class="field ai-features">
+    <div class="ai-row">
+      <label for="ai-features-toggle">AI features</label>
+      <input
+        id="ai-features-toggle"
+        type="checkbox"
+        class="toggle"
+        checked={settings.effective.aiFeaturesEnabled}
+        onchange={onAiFeaturesChange}
+        disabled={settings.loading}
+      />
+    </div>
+    <p class="hint">
+      When on, brew-browser shows extra metadata generated at build time
+      by AI: friendly names, expanded descriptions, use cases, similar
+      package suggestions, and category tags.
+      <strong>Zero LLM calls are made from your machine</strong> — all
+      enrichment is baked into the app binary.
+    </p>
+    <p class="hint">
+      When off, only Homebrew's native metadata appears. Categories
+      (sidebar tile grid, donut chart, chip filters) are also hidden
+      because they're AI-generated.
+    </p>
+  </div>
 </div>
 
 <style>
@@ -171,5 +206,57 @@
     outline: none;
     border-color: var(--color-border-focus);
     box-shadow: var(--shadow-focus-ring);
+  }
+
+  /* Phase 13 — AI features row.
+     Single line: label on the left, checkbox-as-switch on the right.
+     Two paragraphs of hint text below explain the consequence and
+     reassure on the local-only posture. */
+  .ai-features { gap: var(--space-2); }
+  .ai-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    max-width: 480px;
+  }
+  .ai-row label { margin: 0; }
+  .toggle {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 36px;
+    height: 20px;
+    border-radius: var(--radius-full);
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+    position: relative;
+    cursor: pointer;
+    transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+    flex: none;
+  }
+  .toggle::before {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-full);
+    background: var(--color-text-secondary);
+    transition: transform var(--motion-duration-fast) var(--motion-ease-out),
+                background-color var(--motion-duration-fast) var(--motion-ease-out);
+  }
+  .toggle:checked {
+    background: var(--color-brand);
+    border-color: var(--color-brand);
+  }
+  .toggle:checked::before {
+    transform: translateX(16px);
+    background: var(--color-text-inverse, white);
+  }
+  .toggle:disabled { opacity: 0.5; cursor: default; }
+  .toggle:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 </style>

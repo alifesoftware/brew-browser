@@ -23,10 +23,16 @@ use tauri::State;
 
 use crate::error::BrewError;
 use crate::github::{
-    self, auth, fetch_repo_stats, parse_github_url, DeviceFlowStart, GithubStatusDto, PollResult,
-    PollResultDto, RepoStats,
+    self, actions, auth, fetch_repo_stats, parse_github_url, CreatedIssue, DeviceFlowStart,
+    GithubRepo, GithubStatusDto, PollResult, PollResultDto, RepoStats, Token,
 };
 use crate::state::AppState;
+
+/// OAuth scope required for every Phase 12f authed action (star,
+/// unstar, watch, unwatch, create_issue). `public_repo` is the
+/// minimum that grants write-ish operations against public repos
+/// without touching private-repo write access (which would be `repo`).
+const REQUIRED_SCOPE: &str = "public_repo";
 
 // ---------- Repo stats (12c) ----------
 
@@ -122,21 +128,146 @@ pub async fn github_signout(_state: State<'_, AppState>) -> Result<(), BrewError
     auth::signout()
 }
 
+// ---------- Authed actions (12f) ----------
+//
+// Each command below runs the same five-step gate chain before any
+// network call:
+//
+//   1. `require_network(feature)` — paranoid mode kill-switch.
+//   2. `parse_github_url(homepage)` — strict allowlist (rejects
+//      gist./raw./suffix-confusables and anything that isn't exactly
+//      `github.com/<owner>/<repo>`). Mismatch → `InvalidArgument`.
+//   3. `auth::read_token()` — must return `Some(Token)` from the
+//      Keychain or we surface `BrewError::AuthRequired` (no network
+//      attempt). The token never crosses the IPC boundary.
+//   4. `auth::read_scopes()` — must contain `public_repo` or we
+//      surface `BrewError::ScopeRequired { scope }` so the frontend
+//      can route the user to a re-grant flow.
+//   5. Call the matching `github::actions::*` function, which
+//      re-validates the repo defensively before sending.
+
+/// Common gate chain for every Phase 12f authed action. Returns a
+/// `(client, repo, token)` triple on success; surfaces the typed
+/// error on any gate failure.
+async fn authed_gate(
+    state: &AppState,
+    homepage: &str,
+    feature: &'static str,
+) -> Result<(reqwest::Client, GithubRepo, Token), BrewError> {
+    // 1. Paranoid-mode gate.
+    state.require_network(feature).await?;
+
+    // 2. URL allowlist. Authed actions use `InvalidArgument` (rather
+    //    than the `Ok(None)` collapse `github_repo_stats` uses) because
+    //    we shouldn't get this far if the homepage wasn't already
+    //    classified as a GitHub URL on the frontend; an unparseable
+    //    homepage here is a real bug, not a "no stats" outcome.
+    let repo = parse_github_url(homepage).ok_or_else(|| BrewError::InvalidArgument {
+        message: format!("not a github.com/<owner>/<repo> URL: {homepage}"),
+    })?;
+
+    // 3. Auth gate.
+    let token = auth::read_token()?.ok_or(BrewError::AuthRequired)?;
+
+    // 4. Scope gate. The scope list is cached at sign-in and read from
+    //    the Keychain — no extra GitHub round-trip required.
+    let scopes = auth::read_scopes()?.unwrap_or_default();
+    if !scopes.iter().any(|s| s == REQUIRED_SCOPE) {
+        return Err(BrewError::ScopeRequired {
+            scope: REQUIRED_SCOPE.to_string(),
+        });
+    }
+
+    // 5. Build the client once per call (cheap — reqwest pools
+    //    connections; we don't try to share a client across calls
+    //    because the auth gate would have to be re-checked anyway).
+    let client = actions::build_client()?;
+    Ok((client, repo, token))
+}
+
+#[tauri::command]
+pub async fn github_star(
+    homepage: String,
+    state: State<'_, AppState>,
+) -> Result<(), BrewError> {
+    let (client, repo, token) = authed_gate(&state, &homepage, "github_star").await?;
+    actions::star(&client, &repo, &token).await
+}
+
+#[tauri::command]
+pub async fn github_unstar(
+    homepage: String,
+    state: State<'_, AppState>,
+) -> Result<(), BrewError> {
+    let (client, repo, token) = authed_gate(&state, &homepage, "github_unstar").await?;
+    actions::unstar(&client, &repo, &token).await
+}
+
+#[tauri::command]
+pub async fn github_is_starred(
+    homepage: String,
+    state: State<'_, AppState>,
+) -> Result<bool, BrewError> {
+    let (client, repo, token) = authed_gate(&state, &homepage, "github_is_starred").await?;
+    actions::is_starred(&client, &repo, &token).await
+}
+
+#[tauri::command]
+pub async fn github_watch(
+    homepage: String,
+    state: State<'_, AppState>,
+) -> Result<(), BrewError> {
+    let (client, repo, token) = authed_gate(&state, &homepage, "github_watch").await?;
+    actions::watch(&client, &repo, &token).await
+}
+
+#[tauri::command]
+pub async fn github_unwatch(
+    homepage: String,
+    state: State<'_, AppState>,
+) -> Result<(), BrewError> {
+    let (client, repo, token) = authed_gate(&state, &homepage, "github_unwatch").await?;
+    actions::unwatch(&client, &repo, &token).await
+}
+
+#[tauri::command]
+pub async fn github_create_issue(
+    homepage: String,
+    title: String,
+    body: String,
+    labels: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<CreatedIssue, BrewError> {
+    let (client, repo, token) =
+        authed_gate(&state, &homepage, "github_create_issue").await?;
+    // Convert Vec<String> to &[&str] for the borrowed-slice API. The
+    // sanitiser then takes owned Strings back for the JSON payload.
+    let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    actions::create_issue(&client, &repo, &token, &title, &body, &label_refs).await
+}
+
 // ---------- Tests ----------
 
 #[cfg(test)]
 mod tests {
     //! Tests focus on the gate-chain ordering — the actual network/Keychain
-    //! work has its own coverage in `github::{auth, stats, url}`. Here we
-    //! pin the contract that gates fire in the right order:
-    //!   settings → paranoid → URL → fetch.
+    //! work has its own coverage in `github::{actions, auth, stats, url}`. Here
+    //! we pin the contract that gates fire in the right order:
+    //!   settings → paranoid → URL → auth → scope → action.
     //!
     //! The Tauri-command wrappers themselves need an `AppState` to test;
     //! we build one via `AppState::build` and hand-mutate the settings
-    //! slot to drive the gates.
+    //! slot to drive the gates. Auth + scope branches are exercised via
+    //! `inner_authed_gate_with_kc`, which takes a mock keychain so we
+    //! don't touch the real macOS Keychain in CI.
 
     use super::*;
     use crate::commands::settings::{Settings, SettingsLoadState};
+    use crate::github::auth::{
+        KeychainSlot, KEYCHAIN_ACCOUNT_SCOPES, KEYCHAIN_ACCOUNT_TOKEN,
+    };
+    use std::collections::HashMap;
+    use std::sync::Mutex;
 
     async fn build_state_with(slot: SettingsLoadState) -> AppState {
         let state = AppState::build().expect("AppState::build");
@@ -287,5 +418,248 @@ mod tests {
         state.require_network("github_signin").await?;
         let result: PollResult = auth::poll_device_flow(&device_code).await?;
         Ok(result.into())
+    }
+
+    // ---------- Phase 12f: mock keychain + inner gate ----------
+
+    /// In-memory keychain used by the auth/scope gate tests so we
+    /// don't read or write the real macOS Keychain during cargo test.
+    struct MockKeychain {
+        entries: Mutex<HashMap<String, String>>,
+    }
+
+    impl MockKeychain {
+        fn new() -> Self {
+            Self {
+                entries: Mutex::new(HashMap::new()),
+            }
+        }
+        fn with_token_and_scopes(token: &str, scopes: &[&str]) -> Self {
+            let mk = Self::new();
+            mk.entries.lock().unwrap().insert(
+                KEYCHAIN_ACCOUNT_TOKEN.to_string(),
+                token.to_string(),
+            );
+            let json = serde_json::to_string(scopes).unwrap();
+            mk.entries
+                .lock()
+                .unwrap()
+                .insert(KEYCHAIN_ACCOUNT_SCOPES.to_string(), json);
+            mk
+        }
+    }
+
+    impl KeychainSlot for MockKeychain {
+        fn read(&self, account: &str) -> Result<Option<String>, BrewError> {
+            Ok(self.entries.lock().unwrap().get(account).cloned())
+        }
+        fn write(&self, account: &str, value: &str) -> Result<(), BrewError> {
+            self.entries
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            Ok(())
+        }
+        fn delete(&self, account: &str) -> Result<(), BrewError> {
+            self.entries.lock().unwrap().remove(account);
+            Ok(())
+        }
+    }
+
+    /// Mirror of `authed_gate` that reads from an injected keychain
+    /// instead of the production one. Used by tests to drive the
+    /// AuthRequired and ScopeRequired branches deterministically.
+    async fn inner_authed_gate_with_kc(
+        state: &AppState,
+        homepage: &str,
+        feature: &'static str,
+        kc: &dyn KeychainSlot,
+    ) -> Result<(GithubRepo, Token), BrewError> {
+        state.require_network(feature).await?;
+        let repo = parse_github_url(homepage).ok_or_else(|| BrewError::InvalidArgument {
+            message: format!("not a github.com/<owner>/<repo> URL: {homepage}"),
+        })?;
+        let token = auth::read_token_with(kc)?.ok_or(BrewError::AuthRequired)?;
+        let scopes = auth::read_scopes_with(kc)?.unwrap_or_default();
+        if !scopes.iter().any(|s| s == REQUIRED_SCOPE) {
+            return Err(BrewError::ScopeRequired {
+                scope: REQUIRED_SCOPE.to_string(),
+            });
+        }
+        Ok((repo, token))
+    }
+
+    // ---------- Paranoid-mode gate for each new command (6) ----------
+
+    /// Helper: assert that calling `feature` with paranoid ON blocks
+    /// before any keychain or URL work. Asserts the feature string is
+    /// carried verbatim into the error so the frontend toast can route.
+    async fn assert_blocked_by_paranoid(feature: &'static str) {
+        let s = Settings {
+            paranoid_mode: true,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        let r = state.require_network(feature).await;
+        match r {
+            Err(BrewError::ParanoidModeBlocked { feature: f }) => assert_eq!(f, feature),
+            other => panic!("expected ParanoidModeBlocked for {feature}, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn star_blocked_by_paranoid_mode() {
+        assert_blocked_by_paranoid("github_star").await;
+    }
+
+    #[tokio::test]
+    async fn unstar_blocked_by_paranoid_mode() {
+        assert_blocked_by_paranoid("github_unstar").await;
+    }
+
+    #[tokio::test]
+    async fn is_starred_blocked_by_paranoid_mode() {
+        assert_blocked_by_paranoid("github_is_starred").await;
+    }
+
+    #[tokio::test]
+    async fn watch_blocked_by_paranoid_mode() {
+        assert_blocked_by_paranoid("github_watch").await;
+    }
+
+    #[tokio::test]
+    async fn unwatch_blocked_by_paranoid_mode() {
+        assert_blocked_by_paranoid("github_unwatch").await;
+    }
+
+    #[tokio::test]
+    async fn create_issue_blocked_by_paranoid_mode() {
+        assert_blocked_by_paranoid("github_create_issue").await;
+    }
+
+    /// Corrupt settings also fails closed for authed actions (same as
+    /// paranoid=on). The fail-closed rule lives in `require_network`
+    /// itself, but pin it here so the §12f gate chain's contract is
+    /// asserted at the command layer too.
+    #[tokio::test]
+    async fn authed_actions_blocked_when_settings_corrupt() {
+        let state = build_state_with(SettingsLoadState::Corrupt {
+            message: "boom".into(),
+        })
+        .await;
+        let r = state.require_network("github_create_issue").await;
+        assert!(matches!(r, Err(BrewError::ParanoidModeBlocked { .. })));
+    }
+
+    // ---------- Auth / Scope gates ----------
+
+    /// No token in the keychain → AuthRequired, BEFORE any network
+    /// attempt. The URL must already be valid (so we know the auth
+    /// gate, not the URL gate, is the one firing).
+    #[tokio::test]
+    async fn authed_gate_returns_auth_required_when_no_token() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let kc = MockKeychain::new(); // empty
+        let r = inner_authed_gate_with_kc(
+            &state,
+            "https://github.com/octocat/hello-world",
+            "github_star",
+            &kc,
+        )
+        .await;
+        match r {
+            Err(BrewError::AuthRequired) => {}
+            other => panic!("expected AuthRequired, got {other:?}"),
+        }
+    }
+
+    /// Token present but scopes don't include `public_repo` →
+    /// ScopeRequired with `scope == "public_repo"`.
+    #[tokio::test]
+    async fn authed_gate_returns_scope_required_when_public_repo_missing() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let kc = MockKeychain::with_token_and_scopes("ghp_test", &["read:user"]);
+        let r = inner_authed_gate_with_kc(
+            &state,
+            "https://github.com/octocat/hello-world",
+            "github_star",
+            &kc,
+        )
+        .await;
+        match r {
+            Err(BrewError::ScopeRequired { scope }) => assert_eq!(scope, "public_repo"),
+            other => panic!("expected ScopeRequired(public_repo), got {other:?}"),
+        }
+    }
+
+    /// Token + scopes both present → gate returns Ok. We don't run
+    /// the network leg here; the actions module has its own tests.
+    #[tokio::test]
+    async fn authed_gate_passes_with_token_and_public_repo_scope() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let kc =
+            MockKeychain::with_token_and_scopes("ghp_test", &["read:user", "public_repo"]);
+        let r = inner_authed_gate_with_kc(
+            &state,
+            "https://github.com/octocat/hello-world",
+            "github_create_issue",
+            &kc,
+        )
+        .await;
+        assert!(r.is_ok(), "expected gate to pass, got {r:?}");
+        let (repo, _token) = r.unwrap();
+        assert_eq!(repo.owner, "octocat");
+        assert_eq!(repo.repo, "hello-world");
+    }
+
+    /// Non-github URL → InvalidArgument (NOT Ok(None) like
+    /// `github_repo_stats`). Authed actions shouldn't get this far
+    /// from a well-behaved frontend; an unparseable homepage is a
+    /// real bug, not a silent "no stats".
+    #[tokio::test]
+    async fn authed_gate_rejects_non_github_url_with_invalid_argument() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let kc =
+            MockKeychain::with_token_and_scopes("ghp_test", &["read:user", "public_repo"]);
+        let r = inner_authed_gate_with_kc(
+            &state,
+            "https://example.com/foo/bar",
+            "github_star",
+            &kc,
+        )
+        .await;
+        match r {
+            Err(BrewError::InvalidArgument { message }) => {
+                assert!(message.contains("github.com"), "{message}");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    /// Gate ordering: paranoid mode is the FIRST gate. Even with a
+    /// missing token + invalid URL, paranoid must fire first so we
+    /// don't leak "auth required" semantics to a user who told us to
+    /// stop making outbound calls.
+    #[tokio::test]
+    async fn paranoid_gate_fires_before_auth_or_url() {
+        let s = Settings {
+            paranoid_mode: true,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        let kc = MockKeychain::new(); // no token
+        let r = inner_authed_gate_with_kc(
+            &state,
+            "https://not-a-github-url-at-all",
+            "github_star",
+            &kc,
+        )
+        .await;
+        match r {
+            Err(BrewError::ParanoidModeBlocked { feature }) => {
+                assert_eq!(feature, "github_star")
+            }
+            other => panic!("expected ParanoidModeBlocked, got {other:?}"),
+        }
     }
 }

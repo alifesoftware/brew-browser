@@ -348,6 +348,31 @@ pub fn read_token() -> Result<Option<Token>, BrewError> {
     read_token_with(&SystemKeychain)
 }
 
+/// Read the cached scope list (the one we stored at sign-in time).
+///
+/// Returns `Ok(None)` when no scope blob is present in the Keychain —
+/// either because the user isn't signed in or because an older
+/// version's persistence path didn't populate the field. Callers that
+/// need to gate on a specific scope (e.g. `public_repo`) should treat
+/// `None` and an absent entry in the list the same way: surface
+/// `BrewError::ScopeRequired` with the missing scope.
+pub fn read_scopes_with(keychain: &dyn KeychainSlot) -> Result<Option<Vec<String>>, BrewError> {
+    match keychain.read(KEYCHAIN_ACCOUNT_SCOPES)? {
+        Some(raw) => match serde_json::from_str::<Vec<String>>(&raw) {
+            Ok(v) => Ok(Some(v)),
+            // Corrupt blob → treat as missing. The next successful
+            // sign-in will overwrite it.
+            Err(_) => Ok(None),
+        },
+        None => Ok(None),
+    }
+}
+
+/// Read scopes against the production keychain.
+pub fn read_scopes() -> Result<Option<Vec<String>>, BrewError> {
+    read_scopes_with(&SystemKeychain)
+}
+
 /// Delete every stored credential. Idempotent — used by the
 /// "Sign out" button in Settings.
 pub fn signout_with(keychain: &dyn KeychainSlot) -> Result<(), BrewError> {
@@ -820,6 +845,28 @@ mod tests {
         assert_eq!(t.as_str(), "ghp_secret");
         let dbg = format!("{t:?}");
         assert!(!dbg.contains("ghp_secret"), "{dbg}");
+    }
+
+    /// `read_scopes_with` round-trips JSON-encoded scope arrays.
+    /// Critical for Phase 12f scope-required gating — a corrupt blob
+    /// must collapse to `None` so the gate prompts a re-grant instead
+    /// of failing on a parse error.
+    #[test]
+    fn read_scopes_round_trips_json_array() {
+        let kc = MockKeychain::new();
+        // No entry → None.
+        assert!(read_scopes_with(&kc).expect("no entry").is_none());
+
+        // Valid JSON → Some(scopes).
+        kc.write(KEYCHAIN_ACCOUNT_SCOPES, r#"["read:user","public_repo"]"#).unwrap();
+        let scopes = read_scopes_with(&kc).expect("read").expect("Some");
+        assert_eq!(scopes, vec!["read:user", "public_repo"]);
+
+        // Corrupt blob → None (defensive — never errors so the gate
+        // can run "is `public_repo` present?" without a try/catch
+        // sprinkled across every command).
+        kc.write(KEYCHAIN_ACCOUNT_SCOPES, "not json").unwrap();
+        assert!(read_scopes_with(&kc).expect("corrupt").is_none());
     }
 
     // ---------- Failure paths ----------
