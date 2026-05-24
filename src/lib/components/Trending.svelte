@@ -11,11 +11,21 @@
   import { trending } from "$lib/stores/trending.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
+  import { enrichment } from "$lib/stores/enrichment.svelte";
   import type { TrendingEntry, TrendingWindow } from "$lib/types";
 
   onMount(() => {
     if (!trending.report) trending.load();
+    // Prime the enrichment store so AI-enriched friendly names start
+    // resolving as soon as data lands.
+    enrichment.ensureLoaded();
   });
+
+  /** AI-enriched friendly name for a token, or null. Inline call from
+   *  row markup; sync Map.get under the hood. */
+  function friendlyOf(token: string): string | null {
+    return enrichment.friendlyName(token);
+  }
 
   const windows: TrendingWindow[] = ["30d", "90d", "365d"];
 
@@ -76,10 +86,12 @@
         {/each}
       </div>
       <span class="ago text-muted">{agoLabel}</span>
-      <Button size="sm" variant="ghost" onclick={() => trending.load(true)} title="Refresh" ariaLabel="Refresh trending">
-        {#snippet icon()}<RefreshCw size={14} />{/snippet}
-        Refresh
-      </Button>
+      <span class="refresh-wrap">
+        <Button size="sm" variant="ghost" onclick={() => trending.load(true)} title="Refresh (⌘R)" ariaLabel="Refresh trending">
+          {#snippet icon()}<RefreshCw size={14} />{/snippet}
+          Refresh
+        </Button>
+      </span>
     </div>
   </header>
 
@@ -109,7 +121,12 @@
           <li>
             <button class="row" onclick={() => openEntry(e.name, e.kind)}>
               <span class="rank">{e.rank}</span>
-              <span class="name truncate">{e.name}</span>
+              <span class="name truncate">
+                <span class="name-text">{e.name}</span>
+                {#if friendlyOf(e.name)}
+                  <span class="friendly-subtitle">{friendlyOf(e.name)}</span>
+                {/if}
+              </span>
               <span class="kind"><Pill tone={e.kind === "formula" ? "formula" : "cask"}>{e.kind}</Pill></span>
               <span class="count mono">{e.installCountFormatted}</span>
               <span class="trail">
@@ -132,11 +149,44 @@
     gap: var(--space-3);
   }
   .head-right { display: flex; align-items: center; gap: var(--space-3); }
-  .ago { font-size: var(--text-body-sm); }
+  .ago { font-size: var(--text-body-sm); white-space: nowrap; }
 
+  /* Narrow-window responsive: drop the "Updated Ns ago" text and the
+     Refresh button when the head-right cluster starts to crowd the
+     TopBar's reserved 96 px on the right. Refresh stays available via
+     Cmd+R. Threshold tuned for the default 1100×720 window minus a
+     reasonable user-resize. */
+  @media (max-width: 1000px) {
+    .ago { display: none; }
+    .refresh-wrap { display: none; }
+  }
+
+  /* Narrower still (detail panel open + small window): drop the trailing
+     "installed pill" column entirely. Each list-header/row uses 5 columns;
+     the LAST `:nth-child(5)` is the installed-pill trail. */
+  @media (max-width: 880px) {
+    .list-header,
+    .row {
+      grid-template-columns: 48px minmax(0, 1fr) 80px 120px;
+    }
+    .list-header > :nth-child(5),
+    .row > :nth-child(5) { display: none; }
+  }
+
+  /* Tightest: also drop Installs (4th col). Leave # / NAME / TYPE only. */
+  @media (max-width: 720px) {
+    .list-header,
+    .row {
+      grid-template-columns: 48px minmax(0, 1fr) 80px;
+    }
+    .list-header > :nth-child(4),
+    .row > :nth-child(4) { display: none; }
+  }
+
+  /* Matches the TopBar (theme + Settings) group pattern: sunken
+     background, no border, raised + shadow active state. */
   .pillgroup {
     display: inline-flex;
-    border: 1px solid var(--color-border);
     background: var(--color-surface-sunken);
     border-radius: var(--radius-md);
     padding: 2px;
@@ -166,7 +216,13 @@
     position: sticky;
     top: 0;
     z-index: 1;
+    /* Prevent column-header text bleeding across cells when the panel is
+       narrow (detail panel open + small window). Each cell clips to its
+       own column. */
+    overflow: hidden;
   }
+  .list-header > * { min-width: 0; overflow: hidden; }
+  .row > * { min-width: 0; overflow: hidden; }
   .list { display: flex; flex-direction: column; }
   .row {
     display: grid;
@@ -183,7 +239,35 @@
   }
   .row:hover { background: var(--color-surface-sunken); }
   .rank { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
-  .name { font-weight: var(--fw-medium); }
+  /* Vertical flex container so the optional AI-enriched friendly_name
+     subtitle (Phase 13) stacks below the raw token. Children manage
+     their own truncation. */
+  .name {
+    font-weight: var(--fw-medium);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    white-space: normal;
+  }
+  .name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .friendly-subtitle {
+    display: block;
+    font-size: var(--text-caption);
+    color: var(--color-text-muted);
+    font-weight: var(--fw-regular, 400);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+    line-height: 1.2;
+    margin-top: 1px;
+  }
   .count { font-variant-numeric: tabular-nums; text-align: right; color: var(--color-text-secondary); }
   .trail { display: flex; justify-content: flex-end; }
 </style>

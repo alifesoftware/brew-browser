@@ -116,10 +116,12 @@
           {services.list.length} total
         {/if}
       </span>
-      <Button size="sm" variant="ghost" onclick={() => services.load(true)} ariaLabel="Refresh services" title="Refresh" disabled={services.loading}>
-        {#snippet icon()}<RefreshCw size={14} />{/snippet}
-        Refresh
-      </Button>
+      <span class="refresh-wrap">
+        <Button size="sm" variant="ghost" onclick={() => services.load(true)} ariaLabel="Refresh services" title="Refresh (⌘R)" disabled={services.loading}>
+          {#snippet icon()}<RefreshCw size={14} />{/snippet}
+          Refresh
+        </Button>
+      </span>
     </div>
   </header>
 
@@ -208,7 +210,16 @@
     gap: var(--space-3);
   }
   .head-right { display: flex; align-items: center; gap: var(--space-3); }
-  .count { font-size: var(--text-body-sm); }
+  .count { font-size: var(--text-body-sm); white-space: nowrap; }
+
+  /* Narrow-window responsive: same pattern as Trending + Library. Drop the
+     "N running · M total" count and the Refresh button when the head-right
+     cluster crowds the TopBar's reserved 96 px on the right. Cmd+R still
+     refreshes the services list. */
+  @media (max-width: 1000px) {
+    .count { display: none; }
+    .refresh-wrap { display: none; }
+  }
 
   .list-wrap { flex: 1; overflow-y: auto; min-height: 0; }
   .list-header {

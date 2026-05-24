@@ -23,20 +23,36 @@ use crate::state::AppState;
 
 /// Parse the first line of `brew analytics state` into a boolean.
 ///
-/// Strict match per the Phase 12 security review (§ 12b): only two
-/// exact strings are accepted, anything else is treated as an internal
-/// error so the UI can surface "unexpected output" rather than guessing.
+/// Parse the first line of `brew analytics state` stdout, returning
+/// `Ok(true)` when analytics are enabled, `Ok(false)` when disabled.
+///
+/// Phase 12 security-review constraint (§ 12b): we still parse ONLY the
+/// first line — never regex-search the whole output — so trailing brew
+/// banners can't change the answer.
+///
+/// Within that first line we look for the canonical phrasing variants:
+///   `[<backend>] [a|A]nalytics are enabled[.]`
+///   `[<backend>] [a|A]nalytics are disabled[.]`
+/// where `<backend>` is an optional prefix brew may stamp (historically
+/// nothing; modern brew prefixes with `"InfluxDB "` because it switched
+/// the analytics backend). Anything else is `Internal` so the UI surfaces
+/// "unexpected output" instead of silently guessing.
 ///
 /// Split out as a private fn so it can be exercised without a live
 /// `brew` install — see `tests::*` below.
 fn parse_analytics_state(stdout: &str) -> Result<bool, BrewError> {
     let first = stdout.lines().next().map(str::trim).unwrap_or("");
-    match first {
-        "Analytics are enabled." | "Analytics are enabled" => Ok(true),
-        "Analytics are disabled." | "Analytics are disabled" => Ok(false),
-        other => Err(BrewError::Internal {
-            message: format!("unexpected analytics output: {other}"),
-        }),
+    let lower = first.to_ascii_lowercase();
+    // Bound the answer to the first line; ignore optional trailing period.
+    let trimmed = lower.trim_end_matches('.');
+    if trimmed.ends_with("analytics are enabled") {
+        Ok(true)
+    } else if trimmed.ends_with("analytics are disabled") {
+        Ok(false)
+    } else {
+        Err(BrewError::Internal {
+            message: format!("unexpected analytics output: {first}"),
+        })
     }
 }
 
@@ -104,6 +120,29 @@ mod tests {
     #[test]
     fn parses_disabled_without_period() {
         assert!(!parse_analytics_state("Analytics are disabled\n").unwrap());
+    }
+
+    #[test]
+    fn parses_influxdb_enabled() {
+        // Modern brew (post-analytics-backend-switch) prefixes the status
+        // line with the backend name. Real-world output:
+        //   "InfluxDB analytics are enabled."
+        // The Phase 12 strict parser missed this and surfaced the entire
+        // line as "unexpected analytics output" — fixed by ends_with match.
+        assert!(parse_analytics_state("InfluxDB analytics are enabled.\n").unwrap());
+    }
+
+    #[test]
+    fn parses_influxdb_disabled() {
+        assert!(!parse_analytics_state("InfluxDB analytics are disabled.\n").unwrap());
+    }
+
+    #[test]
+    fn parses_arbitrary_backend_prefix() {
+        // Defense in depth: if brew switches backends AGAIN, any prefix
+        // followed by "analytics are enabled/disabled" should still parse.
+        assert!(parse_analytics_state("FutureBackend analytics are enabled.\n").unwrap());
+        assert!(!parse_analytics_state("FutureBackend analytics are disabled\n").unwrap());
     }
 
     #[test]

@@ -68,8 +68,10 @@ class UiStore {
   drawerOpen: boolean = $state(false);
   drawerMinimized: boolean = $state(false);
   paletteOpen: boolean = $state(false);
-  /** Settings modal (Phase 12b). Opened via the sidebar gear icon or ⌘,. */
+  /** Settings modal (Phase 12b). Opened via the top-right gear icon or ⌘,. */
   settingsOpen: boolean = $state(false);
+  /** About modal — native menu "About brew-browser" + sidebar footer link. */
+  aboutOpen: boolean = $state(false);
   theme: ThemePreference = $state("system");
   /** the package currently shown in the detail panel; null = panel closed */
   selectedPackage: { name: string; kind: "formula" | "cask" } | null = $state(null);
@@ -100,6 +102,11 @@ class UiStore {
 
   setSection(s: SidebarSection) {
     this.section = s;
+    // Navigating to ANY section closes the package detail slide-over.
+    // Without this, the detail panel persists across sidebar clicks /
+    // brand-to-Dashboard / Cmd+0..6, which feels jarring — the user
+    // clearly chose a new context; the lingering panel is from the old one.
+    this.selectedPackage = null;
   }
 
   openDrawer() {
@@ -128,6 +135,9 @@ class UiStore {
 
   openSettings() { this.settingsOpen = true; }
   closeSettings() { this.settingsOpen = false; }
+
+  openAbout() { this.aboutOpen = true; }
+  closeAbout() { this.aboutOpen = false; }
 
   // ---------------- Settings (Phase 12b) ----------------
 

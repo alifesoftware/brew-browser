@@ -30,6 +30,7 @@ import {
 } from "$lib/api";
 import { safeOpenUrl } from "$lib/util/url";
 import {
+  brewErrorMessage,
   isBrewError,
   type CreatedIssue,
   type DeviceFlowStart,
@@ -196,7 +197,7 @@ class GithubStore {
     } catch (e) {
       this.signinState = {
         kind: "error",
-        message: isBrewError(e) ? e.code : String(e),
+        message: isBrewError(e) ? brewErrorMessage(e) : String(e),
       };
       return;
     }
@@ -234,7 +235,7 @@ class GithubStore {
       } catch (e) {
         this.signinState = {
           kind: "error",
-          message: isBrewError(e) ? e.code : String(e),
+          message: isBrewError(e) ? brewErrorMessage(e) : String(e),
         };
         return;
       }

@@ -159,3 +159,57 @@ Cmd+W and Cmd+Q are macOS defaults — not intercepted; the OS quits the single-
 ---
 
 *End of inventory. Updated alongside any new component or significant prop change.*
+
+---
+
+## Phase 9 + 11 + 12 + 13 additions
+
+**Author:** Technical Writer (post-implementation pass, 2026-05-24 evening)
+**Scope:** Components, stores, and utilities shipped after the original Wave 2 inventory (Phase 9 categories UI, Phase 11 Dashboard/Services/native feel, Phase 12 Settings/GitHub, Phase 13 enrichment).
+**Note:** Files listed here are appended without modifying the original tables above. Where a component or store later changed behavior in a subsequent phase, the row below reflects the current shipped state.
+
+### Components
+
+| Component | File | Props | State owned | Notes |
+|---|---|---|---|---|
+| `Dashboard` | `Dashboard.svelte` | (none — reads `packages` / `env` / `categories` / `activity` / `github` / `settings` stores) | local `disk: DiskUsageReport \| null`, `diskLoading`, `diskError` | Default landing per the "brand = home" decision. Hero row (installed count / outdated count / brew version), Updates panel with one-click upgrade-all (title is a link → Library outdated filter), Composition split bar (on-request / dep / pinned), top-categories donut (180px SVG, 9-color palette, top 8 + Other, legend click → Discover with chip pre-selected), Storage card (4 paths from `disk_usage`, Reveal-in-Finder per row), optional "Personal stats" card when signed in to GitHub. The hero brand area is a `data-tauri-drag-region`. |
+| `Services` | `Services.svelte` | (none — reads `services`, `ui`, `packages`) | local `sortKey: "name"\|"status"\|"user"`, `sortDir: "asc"\|"desc"` | Sidebar item ⌘5. Sortable list of `brew services` entries with per-row start/stop/restart buttons (smart-disabled by current state). Status sort order: started → scheduled → error → stopped → none → unknown. Refresh button bypasses the 5s backend cache. |
+| `SortableHeader` | `SortableHeader.svelte` | `label: string`, `sortKey: string`, `active: boolean`, `dir: "asc"\|"desc"`, `onSort(key)`, `align?: "left"\|"right"` | — | Reusable column header for list grids. Click toggles direction when already active, switches key otherwise. Uses `aria-label` (not `aria-sort`, since that requires `role="columnheader"` and our list grids aren't true tables). Used by Library, Trending, Services. |
+| `DeviceFlowModal` | `DeviceFlowModal.svelte` | (none — reads `github.signinState`) | local `remainingSeconds: number \| null`, `tickHandle` for the 1s countdown timer | Renders the user-facing half of the GitHub OAuth Device Flow. Shows the user code with a copy button, an "Open in browser" affordance for `verification_uri`, a 15-min countdown, and a Cancel button. Polling lives in the `github` store; this component is pure presentation. Mounts when `github.signinState.kind !== "idle"`. |
+| `IssueModal` | `IssueModal.svelte` | `open`, `title`, `body`, `labels: string[]`, `repo: { owner, repo }`, `homepage`, `onClose()` | local form state (title / body / submitting / error) | Modal form for filing a GitHub issue. Used by the PackageDetail "File issue" button and by the "Wrong?" categorization affordance. Mirrors the backend caps (title ≤ 256, body ≤ 64 KiB) and surfaces error states inline. On success, opens the created issue's `html_url` via `safeOpenUrl`. |
+| `Settings` | `Settings.svelte` | (none — reads `ui.settingsOpen`, `ui.defaultSection`) | local `activeSection: "appearance"\|"network"\|"github"\|"brew"\|"activity"\|"about"` | The Settings modal container. Opens via ⌘, or the sidebar gear icon. 220px left nav + 1fr right pane (deviated from spec's 350+600 — looked awkward at macOS density). Focus trap, Esc to close, click-outside to close. Z-index 81 (sits above palette at 80). Each section is a sibling Svelte file rendered inline by `activeSection`. |
+| `SettingsSectionAppearance` | `SettingsSectionAppearance.svelte` | (none) | — | Theme radio (Light/Dark/System bound to `ui.setTheme`), default landing dropdown (writes to `ui.setDefaultSection` → localStorage), vibrancy material dropdown (writes to `ui.setVibrancyMaterial` with "restart required" note), AI Features master toggle (Phase 13 — reads/writes `settings.data.aiFeaturesEnabled`). |
+| `SettingsSectionNetwork` | `SettingsSectionNetwork.svelte` | (none — reads `settings.svelte.ts`) | — | Real Network controls populated in Phase 12d. Paranoid Mode toggle with warning callout, catalog auto-refresh radios (Off/Weekly/Daily), stale-banner threshold input, cask icon mode radios (Off/Installed only/All), trending TTL input, disclosure list with allowed/blocked indicators per path. Corrupt-file recovery panel with `[Reset to defaults]` when `settings.corruptOnDisk`. |
+| `SettingsSectionGitHub` | `SettingsSectionGitHub.svelte` | (none — reads `github` + `settings` stores) | — | Two independent controls: "Show GitHub stats on package pages" toggle (defaults off), and the Sign-in card that drives the Device Flow modal. Signed-in state shows username + scopes + Sign Out button. Decoupled by design — the user can sign in without enabling stats. |
+| `SettingsSectionBrew` | `SettingsSectionBrew.svelte` | (none) | local `analyticsEnabled: boolean \| null`, `inFlight: boolean` | Analytics toggle (reads via `brewGetAnalytics()` on mount, writes via `brewSetAnalytics`), Confirm-before-destructive toggle (persisted via `ui.setConfirmDestructive` → localStorage). |
+| `SettingsSectionActivity` | `SettingsSectionActivity.svelte` | (none) | — | Two clamped number inputs for the localStorage-backed activity retention caps (Keep last N jobs / Lines per job). Clamping happens in `ui.setActivityMax*` so a hostile localStorage entry can't drive the activity store into pathological retention. |
+| `SettingsSectionAbout` | `SettingsSectionAbout.svelte` | (none) | local `version: string \| null`, `versionError: string \| null` | App version (from `app_version` Tauri command → `tauri::App::package_info`), brew version (from `env` store), MIT license, repo link via `safeOpenUrl`, "zero telemetry, zero accounts" affirmation paragraph. |
+
+### Stores (Svelte 5 runes)
+
+| Store | File | Owns | Notes |
+|---|---|---|---|
+| `categories` | `src/lib/stores/categories.svelte.ts` | `data: CategoriesData \| null`, `loading`, `error`, derived `tiles` (sorted by count, uncategorized last) | Lazy-loads via `categoriesData()` Tauri command on first access. Helpers: `tokensInCategory(slug)` for the filtered Discover view, `categoriesOf(name, kind)` for PackageDetail category pills. Singleton — fetches once per process. |
+| `discover` | `src/lib/stores/discover.svelte.ts` | `selectedCategories: Set<string>` | Shared selection state for Discover / Library / PackageDetail. `selectOnly(slug)` for tile-click semantics (single-element set), `toggle(slug)` for chip add/remove. `hasFilter` derived. Empty set = browse mode; non-empty set + search query = filtered results; non-empty set + no query = union of category memberships. |
+| `library` | `src/lib/stores/library.svelte.ts` | `filter: "all"\|"formulae"\|"casks"\|"outdated"` | Lifted out of the Library component so the Dashboard's "Updates available" card and (future) command palette can preset the filter before navigating. Session-only — does not persist to localStorage by design. |
+| `services` | `src/lib/stores/services.svelte.ts` | `list: Service[]`, `loading`, `error`, `pending: Set<string>` (service names with an in-flight action) | Wraps `services_list` / `services_start` / `services_stop` / `services_restart`. `byName(name)` helper used by PackageDetail to render service controls per-formula. Re-fetches after every mutation (backend already memoises 5s). |
+| `settings` | `src/lib/stores/settings.svelte.ts` | `data: Settings \| null`, `loading`, `error`, `corruptOnDisk: boolean`, derived `effective` | Mirrors backend `settings.json`. Three-state load result (loading → loaded \| corrupt). `corruptOnDisk` triggers the recovery UI in Settings → Network. `effective` returns defaults when `data` is null so consumers don't have to null-check. Single source of truth — frontend reads from here, not from `localStorage`, for any value persisted by Phase 12d+. |
+| `github` | `src/lib/stores/github.svelte.ts` | `status: GithubStatusDto \| null`, `repoStatsCache: Map<homepage, RepoStats \| "miss" \| "rate-limited">`, `signinState: { kind: "idle" \| "waiting" \| ... }`, `pollHandle` for the active Device Flow | Wraps every `github_*` IPC command. `signIn()` runs the full Device Flow loop (start → poll until approved/denied/expired) honouring server `interval` and doubling on `slowDown` per RFC 8628 §3.5. `cancelSignin()` aborts the poll loop. `getRepoStats(homepage)` per-session memo on top of the backend's 24h disk cache. `createIssue(...)` opens the returned `html_url` via `safeOpenUrl` after success. **No token state ever lives here** — everything is derived from `status.signedIn`. |
+| `enrichment` | `src/lib/stores/enrichment.svelte.ts` | `data: EnrichmentData \| null`, `loading`, `error` | Lazy-loads the bundled enrichment payload via `enrichmentData()`. Every public lookup checks `settings.effective.aiFeaturesEnabled` and short-circuits to `null` when the user has the AI Features toggle off — so UI components don't have to re-implement the gate at every call site. |
+
+### Utilities
+
+| Module | File | Exports | Notes |
+|---|---|---|---|
+| `categoryIcon` | `src/lib/util/categoryIcon.ts` | `resolveCategoryIcon(name: string): Component` | Static map of 19 Lucide icon-name → Svelte component for the categories declared in `src-tauri/data/categories.json`. Static map keeps the bundler happy (no dynamic imports) and the supported icon set explicit. Falls back to `HelpCircle` for unknown names so a missing entry won't crash — but it WILL look out of place, so `tools/categorize/categorize.py` introducing a new category requires adding the mapping here too. |
+
+### Mount points (where these get rendered)
+
+- **Dashboard** is the default landing per the `ui.section = "dashboard"` initial state; the sidebar brand is the home button. Rendered in `+page.svelte` when `ui.section === "dashboard"`.
+- **Services** is wired to sidebar item ⌘5 (Library/Discover/Trending/Snapshots/Services/Activity is the current order).
+- **Settings** mounts at z-index 81 (overlay + dialog) inside `+page.svelte` when `ui.settingsOpen === true`. Triggered by ⌘, keyboard shortcut, the sidebar gear icon, or any "Open Settings" deep link from an error state.
+- **DeviceFlowModal** mounts inside `SettingsSectionGitHub` when `github.signinState.kind !== "idle"`.
+- **IssueModal** mounts inside `PackageDetail` and is also reachable from the Categories row's "Wrong?" affordance when the user is signed in.
+- **All 6 SettingsSection\*** components are rendered inline by `Settings.svelte` based on `activeSection`; only one is mounted at a time.
+- **SortableHeader** is consumed by Library, Trending, and Services list grids.
+

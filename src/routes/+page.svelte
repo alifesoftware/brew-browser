@@ -14,6 +14,8 @@
   import ActivityDrawer from "$lib/components/ActivityDrawer.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import Settings from "$lib/components/Settings.svelte";
+  import AboutModal from "$lib/components/AboutModal.svelte";
+  import TopBar from "$lib/components/TopBar.svelte";
   import DeviceFlowModal from "$lib/components/DeviceFlowModal.svelte";
   import Toast from "$lib/components/Toast.svelte";
 
@@ -167,6 +169,10 @@
           {/if}
         </div>
       {/key}
+      <!-- TopBar lives INSIDE .content so it positions relative to the main
+           panel area, not the window. Without this it floated over the
+           PackageDetail's header at the right edge of the window. -->
+      <TopBar />
     </main>
     {#if ui.selectedPackage}
       <ResizeHandle
@@ -185,6 +191,7 @@
   <ActivityDrawer />
   <CommandPalette />
   <Settings />
+  <AboutModal />
   <DeviceFlowModal />
   <Toast />
 </div>
@@ -209,6 +216,9 @@
     flex-direction: column;
     background: var(--color-surface);
     overflow: hidden;
+    /* Positioning context for TopBar — keeps the theme + Settings group
+       anchored to the main panel area, never floating over PackageDetail. */
+    position: relative;
   }
   /* Quiet crossfade when switching sidebar sections.
      Tabs are peers, so we fade content rather than slide (designSystem §6). */

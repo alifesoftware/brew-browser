@@ -47,12 +47,31 @@ pub async fn brew_search(
 
     let (f_res, c_res) = tokio::join!(f_task, c_task);
 
-    let formula_raw = f_res.map_err(|e| BrewError::Internal {
+    let f_outer = f_res.map_err(|e| BrewError::Internal {
         message: format!("formula search task join: {}", e),
-    })??;
-    let cask_raw = c_res.map_err(|e| BrewError::Internal {
+    })?;
+    let c_outer = c_res.map_err(|e| BrewError::Internal {
         message: format!("cask search task join: {}", e),
-    })??;
+    })?;
+
+    // `brew search --formula <q>` and `brew search --cask <q>` each exit 1
+    // (with stderr "Error: No formulae or casks found for ...") when their
+    // own kind has zero matches. For a formula-only token like `abcl` the
+    // cask side legitimately has nothing — that's a "no match", not an
+    // error. Treat each side independently: stdout on success, empty on the
+    // "no match" exit pattern, propagate everything else as a real error.
+    // If BOTH sides fail in unrelated ways, surface the formula error
+    // (matches the order the user is most likely searching for).
+    let formula_raw = match f_outer {
+        Ok(s) => s,
+        Err(e) if is_brew_search_no_match(&e) => String::new(),
+        Err(e) => return Err(e),
+    };
+    let cask_raw = match c_outer {
+        Ok(s) => s,
+        Err(e) if is_brew_search_no_match(&e) => String::new(),
+        Err(e) => return Err(e),
+    };
 
     let installed_set = build_installed_set(&state).await;
 
@@ -136,6 +155,20 @@ pub async fn brew_search_desc(
     })
 }
 
+/// Detect the "no matches" exit pattern from `brew search --formula <q>` or
+/// `brew search --cask <q>`. brew exits 1 with stderr starting with
+/// `"Error: No formulae or casks found for"` when the requested kind has zero
+/// hits — that's a "no match", not a real failure. We want the search command
+/// to treat this as an empty result on that side, not as a typed error.
+fn is_brew_search_no_match(e: &BrewError) -> bool {
+    match e {
+        BrewError::BrewExitNonZero { exit_code, stderr_excerpt, .. } if *exit_code == 1 => {
+            stderr_excerpt.contains("No formulae or casks found")
+        }
+        _ => false,
+    }
+}
+
 fn validate_search_query(q: &str) -> Result<(), BrewError> {
     if q.trim().is_empty() {
         return Err(BrewError::InvalidArgument {
@@ -179,8 +212,53 @@ fn _force_link_validate_package_name() {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_search_query;
+    use super::{is_brew_search_no_match, validate_search_query};
     use crate::error::BrewError;
+
+    // ---------- is_brew_search_no_match ----------
+
+    #[test]
+    fn detects_no_match_exit_pattern() {
+        let err = BrewError::BrewExitNonZero {
+            command: "brew search --cask abcl".into(),
+            exit_code: 1,
+            stderr_excerpt: "Error: No formulae or casks found for \"abcl\".".into(),
+            friendly_message: None,
+        };
+        assert!(is_brew_search_no_match(&err));
+    }
+
+    #[test]
+    fn does_not_classify_other_exit_one_as_no_match() {
+        let err = BrewError::BrewExitNonZero {
+            command: "brew search --formula xyz".into(),
+            exit_code: 1,
+            stderr_excerpt: "Error: Permission denied".into(),
+            friendly_message: None,
+        };
+        assert!(!is_brew_search_no_match(&err));
+    }
+
+    #[test]
+    fn does_not_classify_non_brew_errors_as_no_match() {
+        assert!(!is_brew_search_no_match(&BrewError::BrewNotFound));
+        assert!(!is_brew_search_no_match(&BrewError::InvalidArgument {
+            message: "noop".into(),
+        }));
+    }
+
+    #[test]
+    fn does_not_classify_exit_2_as_no_match() {
+        // Different exit codes should NOT match — keeps the gate tight to
+        // the exact "no match" pattern brew uses.
+        let err = BrewError::BrewExitNonZero {
+            command: "brew search --formula x".into(),
+            exit_code: 2,
+            stderr_excerpt: "Error: No formulae or casks found for x".into(),
+            friendly_message: None,
+        };
+        assert!(!is_brew_search_no_match(&err));
+    }
 
     fn err_message(r: Result<(), BrewError>) -> String {
         match r {

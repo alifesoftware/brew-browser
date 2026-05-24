@@ -28,9 +28,11 @@
       analyticsEnabled = await brewGetAnalytics();
     } catch (e) {
       analyticsError = isBrewError(e) ? brewErrorMessage(e) : String(e);
-      // Surface a toast as well so the user notices even if they navigated
-      // away from the Brew section before the probe resolved.
-      toast.error("Couldn't read brew analytics state", analyticsError);
+      // NOTE: we do NOT toast here — the inline `analyticsError` block in
+      // the Settings → Brew section already renders the same message. The
+      // earlier toast was firing on every Settings open and stacking, since
+      // the load runs on mount. The user is already looking at the Brew
+      // section to see the error; toast is redundant noise.
     } finally {
       analyticsLoading = false;
     }

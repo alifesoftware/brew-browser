@@ -111,10 +111,12 @@
     </div>
     <div class="head-right" data-tauri-drag-region="false">
       <Input bind:value={query} placeholder="Filter…" variant="search" size="sm" ariaLabel="Filter installed packages" />
-      <Button size="sm" variant="ghost" onclick={() => packages.load(true)} ariaLabel="Refresh" title="Refresh (⌘R)">
-        {#snippet icon()}<RefreshCw size={14} />{/snippet}
-        Refresh
-      </Button>
+      <span class="refresh-wrap">
+        <Button size="sm" variant="ghost" onclick={() => packages.load(true)} ariaLabel="Refresh" title="Refresh (⌘R)">
+          {#snippet icon()}<RefreshCw size={14} />{/snippet}
+          Refresh
+        </Button>
+      </span>
     </div>
   </header>
 
@@ -237,6 +239,14 @@
   }
   .head-left { display: flex; align-items: baseline; gap: var(--space-3); }
   .head-right { display: flex; align-items: center; gap: var(--space-2); }
+
+  /* Narrow-window responsive: drop the Refresh button when the head-right
+     cluster starts to crowd the TopBar's reserved 96 px on the right. The
+     Filter input is the primary control here so it stays; Refresh remains
+     available via Cmd+R. */
+  @media (max-width: 1000px) {
+    .refresh-wrap { display: none; }
+  }
   .count { font-size: var(--text-body-sm); }
 
   .filter-bar {
@@ -246,9 +256,10 @@
     flex-direction: column;
     gap: var(--space-2);
   }
+  /* Matches the TopBar (theme + Settings) group pattern: sunken
+     background, no border, raised + shadow active state. */
   .pillgroup {
     display: inline-flex;
-    border: 1px solid var(--color-border);
     background: var(--color-surface-sunken);
     border-radius: var(--radius-md);
     padding: 2px;
@@ -336,6 +347,25 @@
     position: sticky;
     top: 0;
     z-index: 1;
+    overflow: hidden;
+  }
+  .list-header > * { min-width: 0; overflow: hidden; }
+
+  /* Match PackageRow's responsive column-drops so the header stays
+     aligned with the rows when the panel narrows (detail open + small
+     window). Sequences match exactly. */
+  @media (max-width: 880px) {
+    .list-header {
+      grid-template-columns: 24px minmax(0, 1fr) 120px 80px;
+    }
+    .list-header > :nth-child(5) { display: none; }
+  }
+  @media (max-width: 720px) {
+    .list-header {
+      grid-template-columns: 24px minmax(0, 1fr) 80px;
+    }
+    .list-header > :nth-child(3),
+    .list-header > :nth-child(5) { display: none; }
   }
   .list { display: flex; flex-direction: column; }
 </style>

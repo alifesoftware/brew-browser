@@ -23,6 +23,9 @@ import type {
   BrewfileId,
   BrewfileSummary,
   BrewStreamEvent,
+  Cask,
+  CatalogEntrySummary,
+  CatalogSummary,
   CategoriesData,
   CreatedIssue,
   DeviceFlowPoll,
@@ -30,6 +33,7 @@ import type {
   DiskUsageReport,
   EnrichmentData,
   EnrichmentEntry,
+  Formula,
   GithubStatus,
   JobResult,
   OutdatedPackage,
@@ -230,6 +234,52 @@ export function caskIcon(token: string): Promise<string | null> {
  */
 export function caskIconFromHomepage(token: string, homepage: string): Promise<string | null> {
   return invoke<string | null>("cask_icon_from_homepage", { token, homepage });
+}
+
+// ============================================================
+// Phase 12a — catalog (bundled + user-refreshed)
+// ============================================================
+
+/**
+ * Cheap summary of the active catalog (counts, source, age). Used by
+ * the Dashboard catalog line and Discover stale banner. Pure in-memory
+ * read on the backend — no I/O.
+ */
+export function catalogSummary(): Promise<CatalogSummary> {
+  return invoke<CatalogSummary>("catalog_summary");
+}
+
+/**
+ * Fetch fresh `formula.json` + `cask.json` from `formulae.brew.sh`,
+ * write them to the user-data catalog dir, and swap the active catalog
+ * to the user-refreshed copy. Returns the new summary.
+ *
+ * Subject to the paranoid-mode gate; throws `paranoid_mode_blocked`
+ * when "Block all outbound" is on. Single-flight enforced — a second
+ * concurrent call fast-fails with `invalid_argument`.
+ */
+export function catalogRefresh(): Promise<CatalogSummary> {
+  return invoke<CatalogSummary>("catalog_refresh");
+}
+
+/** Look up a single formula by name. `null` on miss. */
+export function catalogLookupFormula(name: string): Promise<Formula | null> {
+  return invoke<Formula | null>("catalog_lookup_formula", { name });
+}
+
+/** Look up a single cask by token. `null` on miss. */
+export function catalogLookupCask(name: string): Promise<Cask | null> {
+  return invoke<Cask | null>("catalog_lookup_cask", { name });
+}
+
+/** Light per-entry list of every formula in the active catalog. */
+export function catalogFormulaeSummary(): Promise<CatalogEntrySummary[]> {
+  return invoke<CatalogEntrySummary[]>("catalog_formulae_summary");
+}
+
+/** Light per-entry list of every cask in the active catalog. */
+export function catalogCasksSummary(): Promise<CatalogEntrySummary[]> {
+  return invoke<CatalogEntrySummary[]>("catalog_casks_summary");
 }
 
 // ============================================================

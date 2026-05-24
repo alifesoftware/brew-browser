@@ -1,6 +1,9 @@
 <script lang="ts">
   import SearchIcon from "@lucide/svelte/icons/search";
   import XIcon from "@lucide/svelte/icons/x";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Loader from "@lucide/svelte/icons/loader-2";
+  import AlertTriangle from "@lucide/svelte/icons/alert-triangle";
   import Pill from "./Pill.svelte";
   import Input from "./Input.svelte";
   import LoadingState from "./LoadingState.svelte";
@@ -9,12 +12,47 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
   import { categories } from "$lib/stores/categories.svelte";
+  import { catalog } from "$lib/stores/catalog.svelte";
   import { discover } from "$lib/stores/discover.svelte";
+  import { enrichment } from "$lib/stores/enrichment.svelte";
+  import { toast } from "$lib/stores/toast.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import type { PackageKind, SearchHit } from "$lib/types";
 
-  // Lazy-load categories on mount. The store guards against duplicate fetches.
+  // Lazy-load categories + catalog summary on mount. The stores guard
+  // against duplicate fetches; we ensure both are primed for the stale
+  // banner and the chip filters.
   categories.ensureLoaded();
+  catalog.ensureLoaded();
+  // Enrichment store is referenced in row markup via `friendlyOf()`;
+  // load once so the lookups start returning hits as soon as data lands.
+  enrichment.ensureLoaded();
+
+  // ────────────────────────────────────────────────────────────────
+  // Phase 12a — stale-catalog banner
+  //
+  // Session-scoped dismissal. We deliberately don't persist this — the
+  // banner is meant to nudge, and a stale catalog the user shrugged at
+  // last week is probably still worth surfacing on the next launch.
+  let bannerDismissed = $state(false);
+
+  /** Returns the AI-enriched friendly_name for a token when the user has
+   *  AI Features on AND the enrichment store has a hit. Null otherwise.
+   *  Called inline from row markup (sync Map.get under the hood — no IPC,
+   *  no per-row $derived needed). */
+  function friendlyOf(token: string): string | null {
+    return enrichment.friendlyName(token);
+  }
+
+  async function refreshFromBanner() {
+    const ok = await catalog.refresh();
+    if (ok) {
+      bannerDismissed = true;
+      toast.success("Catalog refreshed", "Fetched from formulae.brew.sh");
+    } else if (catalog.refreshError) {
+      toast.error("Catalog refresh failed", catalog.refreshError);
+    }
+  }
 
   function openHit(h: { name: string; kind: PackageKind }) {
     ui.selectPackage(h.name, h.kind);
@@ -87,6 +125,42 @@
     <h1>Discover</h1>
   </header>
 
+  <!-- Phase 12a: stale-catalog banner. Sits above the search bar so it
+       reads as a section-level nudge, not a search affordance. Session-
+       dismissable; reappears on next launch if still stale. -->
+  {#if catalog.summary && catalog.isStale && !bannerDismissed}
+    <div class="stale-banner" role="status">
+      <span class="stale-icon"><AlertTriangle size={16} /></span>
+      <span class="stale-text">
+        Catalog is <strong>{catalog.summary.daysOld} days old</strong>.
+        Newer packages and deprecations may be missing.
+      </span>
+      <button
+        type="button"
+        class="stale-refresh"
+        onclick={refreshFromBanner}
+        disabled={catalog.refreshing}
+      >
+        {#if catalog.refreshing}
+          <Loader size={12} class="spin-slow" />
+          <span>Refreshing…</span>
+        {:else}
+          <RefreshCw size={12} />
+          <span>Refresh from brew.sh →</span>
+        {/if}
+      </button>
+      <button
+        type="button"
+        class="stale-dismiss"
+        onclick={() => (bannerDismissed = true)}
+        aria-label="Dismiss catalog staleness banner"
+        title="Dismiss for this session"
+      >
+        <XIcon size={14} />
+      </button>
+    </div>
+  {/if}
+
   <div class="search-bar">
     <Input
       bind:value={search.query}
@@ -156,7 +230,12 @@
           {@const installed = h.installed || packages.isInstalled(h.name, h.kind)}
           <li>
             <button class="row row--with-desc" onclick={() => openHit(h)}>
-              <span class="name truncate">{h.name}</span>
+              <span class="name truncate">
+                <span class="name-text">{h.name}</span>
+                {#if friendlyOf(h.name)}
+                  <span class="friendly-subtitle">{friendlyOf(h.name)}</span>
+                {/if}
+              </span>
               <span class="kind"><Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill></span>
               <span class="desc truncate text-muted">{h.description ?? ""}</span>
               <span class="installed">
@@ -183,7 +262,12 @@
             {@const installed = packages.isInstalled(h.name, h.kind)}
             <li>
               <button class="row row--no-desc" onclick={() => openHit(h)}>
-                <span class="name truncate">{h.name}</span>
+                <span class="name truncate">
+                  <span class="name-text">{h.name}</span>
+                  {#if friendlyOf(h.name)}
+                    <span class="friendly-subtitle">{friendlyOf(h.name)}</span>
+                  {/if}
+                </span>
                 <span class="kind"><Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill></span>
                 <span class="installed">
                   {#if installed}<Pill tone="success">installed</Pill>{/if}
@@ -243,6 +327,70 @@
   .panel-head {
     display: flex; align-items: center; padding: var(--space-4);
     border-bottom: 1px solid var(--color-border);
+  }
+
+  /* ── Phase 12a — stale-catalog banner ─────────────────── */
+  .stale-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    background: var(--color-warning-subtle, rgba(245, 158, 11, 0.1));
+    border-bottom: 1px solid var(--color-warning, #f59e0b);
+    color: var(--color-text-primary);
+    font-size: var(--text-body-sm);
+  }
+  .stale-icon {
+    display: inline-flex;
+    color: var(--color-warning-strong, #b45309);
+    flex-shrink: 0;
+  }
+  .stale-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .stale-text strong {
+    color: var(--color-warning-strong, #b45309);
+    font-weight: var(--fw-semibold);
+  }
+  .stale-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px var(--space-2);
+    height: 24px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-warning-strong, #b45309);
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-medium);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.12s ease;
+  }
+  .stale-refresh:hover:not(:disabled) {
+    background: var(--color-warning-subtle, rgba(245, 158, 11, 0.18));
+    text-decoration: underline;
+  }
+  .stale-refresh:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+  .stale-dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .stale-dismiss:hover {
+    background: var(--color-surface-sunken);
+    color: var(--color-text-primary);
   }
   .search-bar {
     padding: var(--space-4);
@@ -332,7 +480,36 @@
   .row--with-desc { grid-template-columns: minmax(0, 1fr) 80px minmax(0, 2fr) 90px; }
   .row--no-desc   { grid-template-columns: minmax(0, 1fr) 80px 90px; }
   .row:hover { background: var(--color-surface-sunken); }
-  .name { font-weight: var(--fw-medium); }
+  /* Switch to a vertical flex container so the optional friendly-name
+     subtitle (Phase 13) stacks below the raw name. Both children are
+     individually truncated; the parent's truncate utility class still
+     applies to the wrapping span for legacy callers. */
+  .name {
+    font-weight: var(--fw-medium);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    white-space: normal; /* override .truncate's nowrap; children manage their own */
+  }
+  .name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .friendly-subtitle {
+    display: block;
+    font-size: var(--text-caption);
+    color: var(--color-text-muted);
+    font-weight: var(--fw-regular, 400);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+    line-height: 1.2;
+    margin-top: 1px;
+  }
   .desc { font-size: var(--text-body-sm); }
   .installed { justify-self: end; min-width: 0; }
 

@@ -17,6 +17,7 @@
   import { packages } from "$lib/stores/packages.svelte";
   import { env } from "$lib/stores/env.svelte";
   import { categories } from "$lib/stores/categories.svelte";
+  import { catalog } from "$lib/stores/catalog.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { discover } from "$lib/stores/discover.svelte";
   import { library } from "$lib/stores/library.svelte";
@@ -59,8 +60,26 @@
   onMount(() => {
     if (!packages.list) packages.load();
     categories.ensureLoaded();
+    catalog.ensureLoaded();
     loadDisk();
   });
+
+  // ────────────────────────────────────────────────────────────────
+  // Phase 12a — catalog refresh handler
+  //
+  // Refresh writes a fresh `formula.json` + `cask.json` to the user-data
+  // directory and swaps the active catalog. The store handles its own
+  // single-flight gating; we only need to surface success/failure to
+  // the user via the toast queue. Failure messages already disambiguate
+  // paranoid-mode vs brew-exit-non-zero on the store side.
+  async function refreshCatalog() {
+    const ok = await catalog.refresh();
+    if (ok) {
+      toast.success("Catalog refreshed", `Fetched from formulae.brew.sh`);
+    } else if (catalog.refreshError) {
+      toast.error("Catalog refresh failed", catalog.refreshError);
+    }
+  }
 
   // ────────────────────────────────────────────────────────────────
   // Phase 12f — personal-stats card
@@ -355,6 +374,41 @@
           <span class="stat-value">{env.report?.version ?? "—"}</span>
           <span class="stat-label">{env.report?.prefix ?? "Homebrew"}</span>
         </div>
+      </div>
+
+      <!-- Phase 12a — catalog freshness strip. Inline below the hero so
+           the relationship to "version of brew" stays visible. Goes amber
+           when the active catalog is older than the user's stale-banner
+           threshold (default 14 days). -->
+      <div
+        class="catalog-line"
+        class:catalog-line--stale={catalog.summary && catalog.isStale}
+        aria-live="polite"
+      >
+        <span class="catalog-text">
+          Catalog: <strong>{catalog.daysOldLabel}</strong>
+          {#if catalog.summary}
+            <span class="text-muted catalog-source">({catalog.summary.source})</span>
+          {/if}
+        </span>
+        <button
+          type="button"
+          class="catalog-refresh"
+          onclick={refreshCatalog}
+          disabled={catalog.refreshing}
+          title="Fetch the latest formula.json + cask.json from formulae.brew.sh"
+        >
+          {#if catalog.refreshing}
+            <Loader size={12} class="spin-slow" />
+            <span>Refreshing…</span>
+          {:else if catalog.summary && catalog.isStale}
+            <RefreshCw size={12} />
+            <span>Refresh from brew.sh →</span>
+          {:else}
+            <RefreshCw size={12} />
+            <span>Refresh</span>
+          {/if}
+        </button>
       </div>
 
       <!-- Updates panel -->
@@ -655,6 +709,56 @@
   .stat-label {
     font-size: var(--text-body-sm);
     color: var(--color-text-secondary);
+  }
+
+  /* ─── Catalog freshness line (Phase 12a) ──────────────── */
+  .catalog-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    margin-top: calc(-1 * var(--space-2));
+    font-size: var(--text-body-sm);
+    color: var(--color-text-secondary);
+  }
+  .catalog-line--stale {
+    color: var(--color-warning-strong);
+  }
+  .catalog-text strong {
+    color: var(--color-text-primary);
+    font-weight: var(--fw-medium);
+  }
+  .catalog-line--stale .catalog-text strong {
+    color: var(--color-warning-strong);
+  }
+  .catalog-source {
+    font-size: var(--text-caption);
+    margin-left: 4px;
+  }
+  .catalog-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-link);
+    font-size: var(--text-body-sm);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+  .catalog-refresh:hover:not(:disabled) {
+    background: var(--color-surface-sunken);
+    text-decoration: underline;
+  }
+  .catalog-refresh:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+  .catalog-line--stale .catalog-refresh {
+    color: var(--color-warning-strong);
+    font-weight: var(--fw-medium);
   }
 
   /* ─── Card ────────────────────────────────────────────── */

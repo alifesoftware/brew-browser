@@ -49,6 +49,7 @@ use tokio::process::Command;
 use tokio::sync::Semaphore;
 
 use crate::commands::info::validate_cask_token;
+use crate::commands::settings::{CaskIconMode, Settings, SettingsLoadState};
 use crate::error::BrewError;
 use crate::state::AppState;
 
@@ -99,6 +100,21 @@ fn probe_semaphore() -> Arc<Semaphore> {
         .clone()
 }
 
+/// Decide whether `cask_icon_from_homepage` may proceed past the
+/// settings gate. Pure function — extracted from the command so the
+/// three-mode decision can be unit-tested without an `AppState`.
+///
+/// - [`CaskIconMode::Off`]            → false (silent skip)
+/// - [`CaskIconMode::InstalledOnly`]  → only when `is_installed_cask`
+/// - [`CaskIconMode::All`]            → true (current behaviour)
+pub(crate) fn cask_icon_gate_decision(mode: CaskIconMode, is_installed_cask: bool) -> bool {
+    match mode {
+        CaskIconMode::Off => false,
+        CaskIconMode::InstalledOnly => is_installed_cask,
+        CaskIconMode::All => true,
+    }
+}
+
 #[tauri::command]
 pub async fn cask_icon_from_homepage(
     token: String,
@@ -109,6 +125,38 @@ pub async fn cask_icon_from_homepage(
     // validation — the goal is to silently refuse outbound traffic the
     // moment paranoid mode flips on, even for a perfectly valid cask.
     state.require_network("cask_icon_from_homepage").await?;
+
+    // `cask_icon_mode` setting (Phase 13 — Finding 2 follow-up).
+    // Resolve the snapshot up front so the gate decision is testable
+    // (see `cask_icon_gate_decision` below) and so we never re-read
+    // `settings` mid-cascade.
+    let settings_snapshot = {
+        let guard = state.settings.read().await;
+        match &*guard {
+            SettingsLoadState::Loaded(s) => s.clone(),
+            // `Corrupt` is unreachable here — `require_network` above
+            // would have already returned `ParanoidModeBlocked`. Defensive
+            // only: fall back to defaults (= `All`) so a hypothetical
+            // future caller that skips `require_network` still behaves
+            // sensibly.
+            _ => Settings::default(),
+        }
+    };
+
+    // Short-circuit per the gate before touching the filesystem or the
+    // network. `InstalledOnly` consults the cached installed list — we
+    // snapshot it under a read lock so the matching is consistent for
+    // this call.
+    let proceed = {
+        let installed_guard = state.installed_cache.read().await;
+        let is_installed_cask = installed_guard
+            .as_ref()
+            .is_some_and(|list| list.casks.iter().any(|p| p.name == token));
+        cask_icon_gate_decision(settings_snapshot.cask_icon_mode, is_installed_cask)
+    };
+    if !proceed {
+        return Ok(None);
+    }
 
     // Defense in depth — token reaches the filesystem (cache path), so
     // the stricter cask-token validator applies (L1). This rejects `/`
@@ -1176,5 +1224,44 @@ mod tests {
         assert!(miss_marker_is_fresh(&marker).await);
         clear_miss_marker(&marker).await;
         assert!(!miss_marker_is_fresh(&marker).await);
+    }
+
+    // ---------- cask_icon_mode gate (Phase 13 — Finding 2) ----------
+
+    /// `Off` → no probe regardless of installed state. Proves the
+    /// command short-circuits to `Ok(None)` before any network attempt
+    /// or filesystem write when the user opts out entirely.
+    #[test]
+    fn gate_off_returns_false_regardless_of_installed() {
+        assert!(!cask_icon_gate_decision(CaskIconMode::Off, true));
+        assert!(!cask_icon_gate_decision(CaskIconMode::Off, false));
+    }
+
+    /// `InstalledOnly` + token NOT in installed list → no probe.
+    #[test]
+    fn gate_installed_only_blocks_uninstalled() {
+        assert!(!cask_icon_gate_decision(CaskIconMode::InstalledOnly, false));
+    }
+
+    /// `InstalledOnly` + token IN installed list → proceed.
+    #[test]
+    fn gate_installed_only_allows_installed() {
+        assert!(cask_icon_gate_decision(CaskIconMode::InstalledOnly, true));
+    }
+
+    /// `All` (default) → always proceed.
+    #[test]
+    fn gate_all_always_proceeds() {
+        assert!(cask_icon_gate_decision(CaskIconMode::All, true));
+        assert!(cask_icon_gate_decision(CaskIconMode::All, false));
+    }
+
+    /// Defaults: `Settings::default().cask_icon_mode == CaskIconMode::All`,
+    /// so first-launch and post-reset users see the historical Phase 8
+    /// behaviour. Pins the default so a future re-default doesn't
+    /// silently change the icon experience without a settings.md note.
+    #[test]
+    fn default_mode_is_all() {
+        assert_eq!(Settings::default().cask_icon_mode, CaskIconMode::All);
     }
 }

@@ -3,6 +3,7 @@
   import PackageIcon from "@lucide/svelte/icons/package";
   import Pill from "./Pill.svelte";
   import { iconCache } from "$lib/stores/iconCache.svelte";
+  import { enrichment } from "$lib/stores/enrichment.svelte";
   import type { Package } from "$lib/types";
 
   interface Props {
@@ -12,6 +13,14 @@
   }
 
   let { pkg, selected = false, onSelect }: Props = $props();
+
+  /** AI-enriched friendly name for this row's token, or null when the
+   *  AI Features toggle is off / no enrichment entry. Called inline in
+   *  markup — the underlying enrichment.friendlyName() is a sync Map.get(),
+   *  no IPC, sub-microsecond, so we don't need a per-row $derived. */
+  function friendlyOf(token: string): string | null {
+    return enrichment.friendlyName(token);
+  }
 
   // Per-row icon state. We keep this row-local rather than reading
   // iconCache.cache directly so the row can reflect "loading" before the
@@ -65,7 +74,12 @@
     <!-- packages with iconSource.kind === "none" (formulae, casks with no app + no homepage)
          intentionally render an empty 24px slot so the name column stays aligned -->
   </span>
-  <span class="name truncate" title={pkg.name}>{pkg.name}</span>
+  <span class="name truncate" title={pkg.name}>
+    <span class="name-text">{pkg.name}</span>
+    {#if friendlyOf(pkg.name)}
+      <span class="friendly-subtitle">{friendlyOf(pkg.name)}</span>
+    {/if}
+  </span>
   <span class="version truncate">{pkg.installedVersion ?? pkg.stableVersion ?? "—"}</span>
   <span class="kind"><Pill tone={pkg.kind === "formula" ? "formula" : "cask"}>{pkg.kind}</Pill></span>
   <span class="outdated">
@@ -95,6 +109,25 @@
     border-bottom: 1px solid var(--color-border);
     text-align: left;
     transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+  }
+  .row > * { min-width: 0; overflow: hidden; }
+
+  /* Narrow-window responsive (detail panel open + small window): drop the
+     trailing "Outdated" column (5th). Library row layout has 5 cells:
+     icon / name / version / type / outdated. */
+  @media (max-width: 880px) {
+    .row {
+      grid-template-columns: 24px minmax(0, 1fr) 120px 80px;
+    }
+    .row > :nth-child(5) { display: none; }
+  }
+  /* Tightest: also drop Version (3rd col). Leave icon / NAME / TYPE. */
+  @media (max-width: 720px) {
+    .row {
+      grid-template-columns: 24px minmax(0, 1fr) 80px;
+    }
+    .row > :nth-child(3),
+    .row > :nth-child(5) { display: none; }
   }
   .row:hover { background: var(--color-surface-sunken); }
   .row.selected {
@@ -129,7 +162,42 @@
     opacity: 0.7;
   }
 
-  .name { font-weight: var(--fw-medium); }
+  /* Vertical flex container so the optional AI-enriched friendly_name
+     subtitle (Phase 13) stacks below the raw token. Children manage
+     their own truncation; the parent's .truncate class is overridden
+     to allow the column. */
+  .name {
+    font-weight: var(--fw-medium);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    white-space: normal;
+  }
+  .name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  .friendly-subtitle {
+    display: block;
+    font-size: var(--text-caption);
+    color: var(--color-text-muted);
+    font-weight: var(--fw-regular, 400);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+    line-height: 1.2;
+    margin-top: 1px;
+  }
+  /* Selected-row variant: keep the subtitle legible against the strong
+     selection background by tinting toward the inverse text color. */
+  .row.selected .friendly-subtitle {
+    color: var(--color-text-inverse);
+    opacity: 0.75;
+  }
   .version { font-size: var(--text-body-sm); color: var(--color-text-secondary); }
   .upgrade {
     display: inline-flex;

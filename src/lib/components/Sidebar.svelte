@@ -5,10 +5,7 @@
   import Archive from "@lucide/svelte/icons/archive";
   import Activity from "@lucide/svelte/icons/activity";
   import Server from "@lucide/svelte/icons/server";
-  import Sun from "@lucide/svelte/icons/sun";
-  import Moon from "@lucide/svelte/icons/moon";
-  import Monitor from "@lucide/svelte/icons/monitor";
-  import SettingsIcon from "@lucide/svelte/icons/settings";
+  import Heart from "@lucide/svelte/icons/heart";
 
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
@@ -17,7 +14,9 @@
   import { services } from "$lib/stores/services.svelte";
   import { env } from "$lib/stores/env.svelte";
   import { normalizeServiceStatus } from "$lib/types";
-  import type { SidebarSection, ThemePreference } from "$lib/types";
+  import { safeOpenUrl } from "$lib/util/url";
+  import { SPONSOR_URL } from "$lib/util/donate";
+  import type { SidebarSection } from "$lib/types";
 
   interface NavItem {
     id: SidebarSection;
@@ -55,7 +54,7 @@
     return null;
   }
 
-  function setTheme(t: ThemePreference) { ui.setTheme(t); }
+  function openSponsor() { void safeOpenUrl(SPONSOR_URL); }
 
   /**
    * Status dot color follows the spec in uxArchitecture.md §2:
@@ -129,22 +128,6 @@
   </nav>
 
   <footer class="foot">
-    <div class="controls">
-      <div class="theme" role="group" aria-label="Theme">
-        <button class:on={ui.theme === "light"}  title="Light"  aria-label="Light theme"  onclick={() => setTheme("light")}><Sun size={14} /></button>
-        <button class:on={ui.theme === "dark"}   title="Dark"   aria-label="Dark theme"   onclick={() => setTheme("dark")}><Moon size={14} /></button>
-        <button class:on={ui.theme === "system"} title="System" aria-label="System theme" onclick={() => setTheme("system")}><Monitor size={14} /></button>
-      </div>
-      <button
-        type="button"
-        class="gear"
-        title="Settings (⌘,)"
-        aria-label="Open Settings"
-        onclick={() => ui.openSettings()}
-      >
-        <SettingsIcon size={14} />
-      </button>
-    </div>
     <button
       type="button"
       class="status"
@@ -158,6 +141,16 @@
     >
       <span class="dot" aria-hidden="true"></span>
       <span class="status-label">{env.shortLabel}</span>
+    </button>
+    <button
+      type="button"
+      class="donate"
+      title="Open GitHub Sponsors page in your browser"
+      aria-label="Donate to brew-browser on GitHub Sponsors"
+      onclick={openSponsor}
+    >
+      <Heart size={11} />
+      <span>Donate</span>
     </button>
   </footer>
 </aside>
@@ -247,52 +240,24 @@
     flex-direction: column;
     gap: var(--space-2);
   }
-  .controls {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-  .theme {
+  .donate {
     display: inline-flex;
     align-items: center;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-sunken);
-    padding: 2px;
-    width: max-content;
-    gap: 2px;
-  }
-  .theme button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 22px;
+    gap: 6px;
+    align-self: flex-start;
+    padding: 2px var(--space-1);
+    margin: -2px calc(-1 * var(--space-1));
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--text-caption);
     border-radius: var(--radius-sm);
-    color: var(--color-text-muted);
-  }
-  .theme button.on {
-    background: var(--color-surface-raised);
-    color: var(--color-text-primary);
-    box-shadow: var(--shadow-xs);
-  }
-  .gear {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-sunken);
-    color: var(--color-text-muted);
     cursor: pointer;
     transition: background-color var(--motion-duration-fast) var(--motion-ease-out),
                 color var(--motion-duration-fast) var(--motion-ease-out);
   }
-  .gear:hover {
-    background: var(--color-surface-raised);
-    color: var(--color-text-primary);
+  .donate:hover {
+    background: var(--color-surface-sunken);
+    color: var(--color-brand);
   }
   .status {
     display: inline-flex;

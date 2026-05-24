@@ -19,6 +19,7 @@ use tauri::State;
 
 use crate::catalog::{Cask, Catalog, Formula, Manifest, MAX_CATALOG_BYTES};
 use crate::commands::info::{validate_cask_token, validate_package_name};
+use crate::commands::settings::{CatalogAutoRefresh, SettingsLoadState};
 use crate::error::BrewError;
 use crate::state::AppState;
 
@@ -111,6 +112,18 @@ pub async fn catalog_summary(state: State<'_, AppState>) -> Result<CatalogSummar
 
 #[tauri::command]
 pub async fn catalog_refresh(state: State<'_, AppState>) -> Result<CatalogSummary, BrewError> {
+    // The IPC command is a thin wrapper around `refresh_catalog_inner`
+    // so the same logic can be triggered from the startup auto-refresh
+    // helper (which has `&AppState`, not `State<'_, AppState>`).
+    refresh_catalog_inner(&state).await
+}
+
+/// Inner refresh routine. Takes `&AppState` so it can be called from
+/// both the IPC handler above and the startup auto-refresh helper
+/// (`maybe_auto_refresh_catalog`). The function still consults
+/// `require_network` and the single-flight mutex; both gates remain
+/// authoritative regardless of caller.
+pub(crate) async fn refresh_catalog_inner(state: &AppState) -> Result<CatalogSummary, BrewError> {
     // Paranoid-mode gate (Phase 12d). Replaces the prior TODO. With this
     // gate in place, the user's "block all outbound" master switch is
     // honoured by the catalog refresh just like every other network-
@@ -246,6 +259,117 @@ pub async fn catalog_casks_summary(
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
+}
+
+// ---------- Auto-refresh (Phase 13 — Finding 2) ----------
+
+/// Decide whether the auto-refresh scheduler should kick off a fetch
+/// right now. Pure function — extracted so the schedule logic can be
+/// unit-tested without an `AppState`, network, or filesystem.
+///
+/// Returns `true` when:
+/// - `schedule` is [`CatalogAutoRefresh::Daily`] and `age` >= 24 hours,
+/// - `schedule` is [`CatalogAutoRefresh::Weekly`] and `age` >= 7 days.
+///
+/// Returns `false` for [`CatalogAutoRefresh::Off`] regardless of age,
+/// and for any positive schedule whose age is below the threshold.
+pub(crate) fn should_auto_refresh(schedule: CatalogAutoRefresh, age: Duration) -> bool {
+    match schedule {
+        CatalogAutoRefresh::Off => false,
+        CatalogAutoRefresh::Daily => age >= Duration::from_secs(24 * 60 * 60),
+        CatalogAutoRefresh::Weekly => age >= Duration::from_secs(7 * 24 * 60 * 60),
+    }
+}
+
+/// Compute the age of the active catalog relative to `now`. Returns
+/// `None` when `as_of` is empty or unparseable (in which case the
+/// scheduler treats the catalog as "unknown age" and skips the refresh
+/// rather than re-fetching on every boot — manual refresh remains
+/// available as the recovery path).
+fn catalog_age(as_of: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+    use chrono::DateTime;
+    if as_of.is_empty() {
+        return None;
+    }
+    let t = as_of.parse::<DateTime<chrono::Utc>>().ok()?;
+    let delta = now.signed_duration_since(t);
+    delta.to_std().ok()
+}
+
+/// Startup auto-refresh hook. Called once just after `AppState::build`
+/// (see `state::initialize`) on a background tokio task so it never
+/// blocks the setup hook.
+///
+/// Behaviour:
+/// 1. Reads settings via `state.settings.read()`. `Off` → return.
+///    `Corrupt` → also return (the `require_network` gate inside the
+///    refresh would have denied anyway; we short-circuit one step
+///    earlier so we don't even log an attempt).
+/// 2. Reads the active catalog's `as_of`; unparseable → log + return.
+/// 3. If `should_auto_refresh` returns true, calls `refresh_catalog_inner`.
+///    Network errors are non-fatal — they are logged via `tracing` and
+///    the user keeps the existing (stale) catalog. Manual refresh from
+///    the Dashboard remains available as the recovery path.
+///
+/// Paranoid mode is handled transparently by `refresh_catalog_inner`'s
+/// existing `require_network` gate.
+pub async fn maybe_auto_refresh_catalog(state: &AppState) {
+    // 1. Read the schedule from settings.
+    let schedule = {
+        let guard = state.settings.read().await;
+        match &*guard {
+            SettingsLoadState::Loaded(s) => s.catalog_auto_refresh,
+            // FirstLaunch defaults to Off (current behaviour preserved);
+            // Corrupt also short-circuits — the user has to repair
+            // settings before any auto-refresh fires.
+            _ => CatalogAutoRefresh::Off,
+        }
+    };
+    if matches!(schedule, CatalogAutoRefresh::Off) {
+        return;
+    }
+
+    // 2. Look up the active catalog's age.
+    let as_of = {
+        let guard = state.catalog.read().await;
+        guard.as_of.clone()
+    };
+    let now = chrono::Utc::now();
+    let Some(age) = catalog_age(&as_of, now) else {
+        tracing::info!(
+            "catalog auto-refresh: skipping — catalog as_of is empty or unparseable ({as_of:?})"
+        );
+        return;
+    };
+
+    // 3. Apply the schedule.
+    if !should_auto_refresh(schedule, age) {
+        tracing::debug!(
+            "catalog auto-refresh: not due yet (schedule={schedule:?}, age={age:?})"
+        );
+        return;
+    }
+
+    tracing::info!(
+        "catalog auto-refresh: scheduling refresh (schedule={schedule:?}, age={age:?})"
+    );
+
+    // 4. Run the refresh. Errors are non-fatal — log and move on. The
+    // user keeps the stale catalog and can hit the Dashboard refresh
+    // button if they want to retry immediately.
+    match refresh_catalog_inner(state).await {
+        Ok(summary) => {
+            tracing::info!(
+                "catalog auto-refresh: success ({} formulae, {} casks, as_of={})",
+                summary.formula_count,
+                summary.cask_count,
+                summary.as_of
+            );
+        }
+        Err(e) => {
+            tracing::warn!("catalog auto-refresh: failed (non-fatal): {e:?}");
+        }
+    }
 }
 
 // ---------- Refresh internals ----------
@@ -481,5 +605,114 @@ mod tests {
                 r
             );
         }
+    }
+
+    // ---------- Auto-refresh schedule (Phase 13 — Finding 2) ----------
+
+    /// `Off` schedule never triggers regardless of how old the catalog is.
+    #[test]
+    fn auto_refresh_off_is_always_false() {
+        assert!(!should_auto_refresh(
+            CatalogAutoRefresh::Off,
+            Duration::from_secs(0)
+        ));
+        assert!(!should_auto_refresh(
+            CatalogAutoRefresh::Off,
+            Duration::from_secs(365 * 24 * 60 * 60),
+        ));
+    }
+
+    /// `Daily` + 25h → true (past the 24h threshold). This is the
+    /// explicit acceptance criterion from the spec.
+    #[test]
+    fn auto_refresh_daily_at_25_hours_is_true() {
+        let age = Duration::from_secs(25 * 60 * 60);
+        assert!(should_auto_refresh(CatalogAutoRefresh::Daily, age));
+    }
+
+    /// `Daily` + 23h → false (still within the day window).
+    #[test]
+    fn auto_refresh_daily_at_23_hours_is_false() {
+        let age = Duration::from_secs(23 * 60 * 60);
+        assert!(!should_auto_refresh(CatalogAutoRefresh::Daily, age));
+    }
+
+    /// `Daily` + exactly 24h → true (inclusive threshold).
+    #[test]
+    fn auto_refresh_daily_at_24_hours_is_true() {
+        let age = Duration::from_secs(24 * 60 * 60);
+        assert!(should_auto_refresh(CatalogAutoRefresh::Daily, age));
+    }
+
+    /// `Weekly` + 8 days → true.
+    #[test]
+    fn auto_refresh_weekly_at_8_days_is_true() {
+        let age = Duration::from_secs(8 * 24 * 60 * 60);
+        assert!(should_auto_refresh(CatalogAutoRefresh::Weekly, age));
+    }
+
+    /// `Weekly` + 6 days → false.
+    #[test]
+    fn auto_refresh_weekly_at_6_days_is_false() {
+        let age = Duration::from_secs(6 * 24 * 60 * 60);
+        assert!(!should_auto_refresh(CatalogAutoRefresh::Weekly, age));
+    }
+
+    /// `Weekly` + exactly 7 days → true (inclusive threshold).
+    #[test]
+    fn auto_refresh_weekly_at_7_days_is_true() {
+        let age = Duration::from_secs(7 * 24 * 60 * 60);
+        assert!(should_auto_refresh(CatalogAutoRefresh::Weekly, age));
+    }
+
+    /// `Weekly` + zero age (fresh catalog) → false.
+    #[test]
+    fn auto_refresh_weekly_zero_age_is_false() {
+        assert!(!should_auto_refresh(
+            CatalogAutoRefresh::Weekly,
+            Duration::ZERO
+        ));
+    }
+
+    /// `Daily` + zero age (fresh catalog) → false.
+    #[test]
+    fn auto_refresh_daily_zero_age_is_false() {
+        assert!(!should_auto_refresh(
+            CatalogAutoRefresh::Daily,
+            Duration::ZERO
+        ));
+    }
+
+    // ---------- catalog_age helper ----------
+
+    #[test]
+    fn catalog_age_empty_string_is_none() {
+        let now = chrono::Utc::now();
+        assert!(catalog_age("", now).is_none());
+    }
+
+    #[test]
+    fn catalog_age_unparseable_is_none() {
+        let now = chrono::Utc::now();
+        assert!(catalog_age("not a date", now).is_none());
+    }
+
+    #[test]
+    fn catalog_age_computes_known_delta() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-24T12:00:00Z".parse().unwrap();
+        // 25 hours earlier.
+        let age = catalog_age("2026-05-23T11:00:00Z", now).expect("parse");
+        assert_eq!(age, Duration::from_secs(25 * 60 * 60));
+    }
+
+    #[test]
+    fn catalog_age_future_timestamp_is_none() {
+        // A future `as_of` (clock skew, hand-edited manifest) yields a
+        // negative chrono::Duration which `to_std()` rejects → None.
+        // The scheduler treats this as "unknown age" and skips, which
+        // is the safe behaviour.
+        let now: chrono::DateTime<chrono::Utc> = "2026-05-24T12:00:00Z".parse().unwrap();
+        let r = catalog_age("9999-01-01T00:00:00Z", now);
+        assert!(r.is_none(), "future timestamps must collapse to None");
     }
 }

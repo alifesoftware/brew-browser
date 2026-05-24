@@ -1,91 +1,131 @@
 # Active Context
 
-**Date:** 2026-05-24 (end-of-session 2026-05-24-night, post-Phase-12 Wave 2)
-**State:** Phases 9, 11, 12a, 12b, 12c, 12d, 12e all landed in working tree. 334 tests passing. Only Phase 12f (GitHub authed actions) + Phase 13 (catalog enrichment) remain in the current plan.
+**Date:** 2026-05-24 (late session — post-Phase-12g/13b cleanup + UI polish pass)
+**State:** Phase 12 (all 6 sub-phases) + Phase 13 infrastructure + Phase 12g/13b cleanup pass + extensive UI polish all complete. Tier A enrichment baked (15,725 entries). 411 tests passing. Working tree has ~40 staged files ready to commit.
 
 ## Repo
 
 - **github.com/msitarzewski/brew-browser** — public, MIT, `main` branch
-- **Release:** v0.1.0 at <https://github.com/msitarzewski/brew-browser/releases/tag/v0.1.0> — signed/notarized `brew-browser_0.1.0_aarch64.dmg`
-- 6 commits to date (next commit cluster pending — Wave 1 + Wave 2):
-  - `653e26f` feat: initial release — brew-browser v0.1.0
-  - `c72e31d` data: initial LLM-generated package categories + landing page
-  - `2dad9be` landing: drop Caddyfile snippet
-  - `cb60e4a` build: signed + notarized release pipeline
-  - `c2ab41f` memory-bank: NEXT-SESSION handoff doc
-  - `84ad010` feat: Phase 9 + 11 — Dashboard, Services, donut, category linking, native vibrancy
+- **Release:** v0.1.0 live at <https://github.com/msitarzewski/brew-browser/releases/tag/v0.1.0>
+- 7 commits to date (8th pending — this update):
+  - `653e26f` initial release v0.1.0 (186 files)
+  - `c72e31d` LLM-generated categories + landing page
+  - `2dad9be` drop Caddyfile snippet
+  - `cb60e4a` signed + notarized release pipeline
+  - `c2ab41f` NEXT-SESSION handoff doc
+  - `84ad010` Phase 9 + 11 — Dashboard, Services, donut, category linking, vibrancy
+  - `99a1f2c` Phase 12 Wave 1+2 — bundled catalog + Settings + paranoid mode + GitHub anon + Device Flow
+  - `8b89c40` Phase 12f + Phase 13 — GitHub authed actions + enrichment infrastructure
 
-## Working tree this session (post-Phase-11 commit `84ad010`)
+## What landed since `8b89c40`
 
-### Phase 12a — Bundled catalog + manual refresh ✅
-- `tools/catalog/fetch.py` + README
-- `src-tauri/data/catalog/{formula,cask}.json.gz` + `manifest.json` (6.1 MiB bundled, 8,369 formulae + 7,659 casks as of 2026-05-24T07:59:56Z)
-- `src-tauri/src/catalog/mod.rs` — `Catalog`, `Formula`, `Cask`, `Manifest`, `CatalogSource`; size caps (64 MiB raw / 128 MiB decompressed / 4 KiB per field / 200 char names); `load_bundled`/`load_user_data`/`resolve_active`/`write_user_data`; custom deserializers for `license` and `versions.stable`; corrupt-recovery cleanup
-- `src-tauri/src/commands/catalog.rs` — 6 commands: `catalog_summary`/`catalog_refresh`/`catalog_lookup_formula`/`catalog_lookup_cask`/`catalog_formulae_summary`/`catalog_casks_summary`. Single-flight refresh via `try_lock`; 60s reqwest timeout; streaming fetch_capped with 64 MiB cap; gzip then atomic write; post-write reload before swap
-- `src-tauri/src/util/{mod,fs}.rs` — `atomic_write` (temp + fsync + rename + fsync parent) and `read_capped` (errors on oversize, doesn't truncate). Shared chokepoints used by 12c + 12d
-- AppState additions: `catalog: RwLock<Arc<Catalog>>`, `catalog_refresh_in_flight: Arc<Mutex<()>>`. Sync bundled load in `build()`, async upgrade from user-data spawned at startup
-- `flate2 = "1"` added
-- +38 tests (210 → 248)
+### Tier A catalog enrichment baked
+- `python tools/enrich/enrich.py --tier-a` against Anthropic Haiku 4.5
+- **15,725 entries** written to `src-tauri/data/enrichment.json.gz` (771 KB compressed)
+- Cost: ~$3-5 against user's Anthropic API
+- Bundle: 6.1 MiB catalog + 0.74 MiB enrichment = ~6.9 MiB total bundled data
+- `tools/enrich/enrich.py` patched: cascade `.env` lookup — falls back to `tools/categorize/.env` so the user doesn't have to duplicate the ANTHROPIC_API_KEY across both tools
 
-### Phase 12b — Settings shell + brew analytics ✅
-- `src-tauri/src/commands/brew_env.rs` — `brew_get_analytics` (strict first-line parser), `brew_set_analytics`, `app_version`. Parser extracted as private fn + 8 tests
-- `src/lib/components/Settings.svelte` — modal with left-nav, focus trap, Esc + click-outside-to-close, gear-icon trigger, Cmd+, shortcut
-- 6 section components: `SettingsSectionAppearance`, `SettingsSectionNetwork`, `SettingsSectionGitHub`, `SettingsSectionBrew`, `SettingsSectionActivity`, `SettingsSectionAbout`
-- `src/lib/stores/ui.svelte.ts` — added `settingsOpen`, `defaultSection`, `vibrancyMaterial`, `confirmDestructive`, `activityMaxJobs`, `activityMaxLines` with persistence + clamp validators
-- `src/lib/api.ts` — `brewGetAnalytics`, `brewSetAnalytics`, `appVersion` wrappers
-- Sidebar gear icon next to theme controls
-- +8 tests (248 → 256)
+### Phase 12g/13b cleanup pass (4 IMPORTANT findings from Code Reviewer)
+1. **Phase 12a frontend wired** — `src/lib/stores/catalog.svelte.ts`, `Catalog`/`Formula`/`Cask`/`CatalogSummary` types in types.ts, 6 IPC wrappers in api.ts, Dashboard catalog freshness line, Discover stale-catalog banner (dismissable per-session)
+2. **Three persisted settings actually honored:**
+   - `trending_ttl_minutes` consumed in `trending_fetch` (was hardcoded 60min)
+   - `cask_icon_mode` consumed in `cask_icon_from_homepage` (Off/InstalledOnly/All gate before paranoid check)
+   - `catalog_auto_refresh` consumed via new `maybe_auto_refresh_catalog` startup hook + `should_auto_refresh` decision helper; `refresh_catalog_inner` extracted from IPC command for reuse
+3. **search-no-match hotfix** — `brew search abcl` had been returning "Search failed: brew_exit_non_zero" because `brew search --cask abcl` exits 1 (formula-only token). `is_brew_search_no_match` helper now tolerates per-kind no-match exits. +4 tests
+4. **Phase 13 friendly names rendered in list rows** — Discover (search + chip-filtered), Library (via PackageRow), Trending all show friendly_name as a subtitle below raw token when AI Features is on
+5. **+23 backend tests** for settings consumers, +4 for search hotfix, **411 total** (was 385)
 
-### Phase 12d — Paranoid mode + network settings + settings persistence ✅
-- `src-tauri/src/commands/settings.rs` — `Settings` struct, `CatalogAutoRefresh`/`CaskIconMode` enums, `SettingsLoadState { FirstLaunch | Loaded(Settings) | Corrupt(...) }`, `settings_get`/`settings_set`/`settings_reset` commands, `load_at_startup` sync loader, `persist` writer using `atomic_write`
-- `state.rs` — `settings: Arc<RwLock<SettingsLoadState>>` field, `require_network(feature)` method (fail-closed on Corrupt, ok on FirstLaunch + Loaded-and-paranoid-off)
-- `error.rs` — `ParanoidModeBlocked { feature: String }` variant
-- Wired `require_network` into `trending_fetch`, `cask_icon_from_homepage`, `catalog_refresh` as first line of each command
-- `src/lib/stores/settings.svelte.ts` — Settings store with `data`/`loading`/`error`/`corruptOnDisk` + `load`/`save`/`reset`
-- `SettingsSectionNetwork.svelte` rewritten with Paranoid Mode toggle + warning callout, Catalog auto-refresh radios, stale-banner threshold, Cask icon mode radios, Trending TTL, dynamic disclosure list with allowed/blocked indicators, corrupt-file recovery UI with [Reset to defaults]
-- `paranoid_mode_blocked` added to `BrewErrorPayload`
-- README "Open by default" updated for 5 paths + Paranoid Mode + corrupt-file fail-closed
-- +18 tests (256 → 274)
+### Extensive UI polish pass
 
-### Phase 12c + 12e — GitHub anonymous + Device Flow + Keychain ✅ (combined Backend Architect pass)
-- `src-tauri/src/github/{mod,url,auth,stats}.rs`
-  - `url.rs` — strict `parse_github_url`: exact host match `github.com` (rejects subdomains + suffix attacks), owner+repo `^[A-Za-z0-9._-]{1,39}$`, no `..` segments, strips `.git`/`/tree/...`. 20 validator tests
-  - `auth.rs` — Device Flow + Keychain. `Token` newtype with redacted `Debug`. Service ID `dev.openbrew.browser` matches bundle ID (test parses tauri.conf.json). OAuth scopes `["read:user", "public_repo"]` minimum (pinned by test). Polling honors server `interval` + doubles on `slow_down` per RFC 8628 §3.5. No disk fallback on Keychain failure
-  - `stats.rs` — `fetch_repo_stats` with 24h disk cache at `app_data_dir/github-cache/<owner>__<repo>.json`. 1 MiB body cap. Rate-limit handling (403 + `X-RateLimit-Remaining: 0` → typed `GithubRateLimited { reset_at }`, no retry, no backoff). Auth header sent when token present
-  - `mod.rs` — `#![deny(clippy::print_*, dbg_macro)]` enforced; token never logged
-- `src-tauri/src/commands/github.rs` — 5 commands: `github_repo_stats`/`github_status`/`github_signin_start`/`github_signin_poll`/`github_signout`. Every one consults `require_network` AND `settings.github_enabled` before any network attempt
-- `settings.rs` — added `github_enabled: bool` field (default false)
-- `error.rs` — `GithubRateLimited`/`KeychainUnavailable`/`AuthRequired`/`ScopeRequired` variants (last two prepped for 12f)
-- `tauri.conf.json` CSP: `connect-src` adds `https://api.github.com` + `https://github.com` (both in one shot)
-- `keyring = "3"` + `url = "2"` added
-- `src/lib/stores/github.svelte.ts` — github store with status + repoStatsCache + signIn/signOut/getRepoStats
-- `src/lib/components/DeviceFlowModal.svelte` — user code display, "Open in browser" button, poll loop
-- `SettingsSectionGitHub.svelte` — toggle + sign-in flow + privacy text
-- `PackageDetail.svelte` — GitHub stats card below homepage when settings allow
-- BUILD.md addendum: "GitHub OAuth App (one-time setup before release)" 7-step guide. Placeholder `GITHUB_OAUTH_CLIENT_ID` MUST be swapped before any release
-- +60 tests (274 → 334)
+**Native macOS menu**
+- `tauri::menu` builder in `src-tauri/src/lib.rs` — App menu (About brew-browser / Settings… ⌘, / Hide / Hide Others / Show All / Quit) + Edit + Window submenus
+- `on_menu_event` handler emits `menu:about` and `menu:settings` Tauri events
+- Frontend `+layout.svelte` listens via `@tauri-apps/api/event::listen` and opens the matching modal
+- **Requires app restart to register** (menus build at startup)
+
+**About brew-browser modal** (`src/lib/components/AboutModal.svelte`)
+- 🍺 hero + version + brew version + license + repo + AGENCY_AGENTS credit (link to https://github.com/msitarzewski/agency-agents)
+- "Donate to the project" CTA → GitHub Sponsors
+- "Built with **Agency Agents** — the multi-agent toolkit that orchestrated the waves... powered by Anthropic's **Claude Opus 4.7** and the **Claude Agent SDK**"
+- Zero-telemetry posture line at bottom
+
+**GitHub Sponsors setup**
+- `.github/FUNDING.yml` → `github: [msitarzewski]` (Sponsor button appears on repo)
+- Shared `src/lib/util/donate.ts` exports `SPONSOR_URL = "https://github.com/sponsors/msitarzewski"` (single source for AboutModal + Sidebar)
+- Sidebar footer gets a `♥ Donate` link under the brew version
+
+**TopBar — theme + Settings group, top-right**
+- New `src/lib/components/TopBar.svelte`
+- Theme dropdown (single icon reflecting current theme — sun/moon/monitor — click opens 3-item popover Light/Dark/System with active checkmark)
+- Settings gear next to it (Cmd+,)
+- `position: absolute` inside `.content` (NOT fixed — keeps it anchored to the main panel area, never overlaps PackageDetail)
+- Visual group: subtle sunken background, hair-line divider between buttons, no hard border
+- Theme + Settings stripped from sidebar footer
+
+**Unified panel-head styling** (the "precision, happy" pass)
+- Global `.panel-head` baseline in `src/app.css` pins height, padding, border-bottom, h1 typography for **every** panel-head — Dashboard / Library / Discover / Trending / Snapshots / Services / Activity AND PackageDetail
+- `!important` justified as cross-component layout coordination (each Svelte component has scoped styles)
+- `.content .panel-head` scopes the 96px right-padding reserve to main panels only (detail panel doesn't need TopBar reserve)
+- Header separators line up perfectly across panels; switching sections no longer makes the bottom border visibly jump
+
+**Responsive headers + columns** (avoid the crashing at narrow widths)
+- All panel-heads with right-cluster controls (Trending, Library, Services, ActivityHistory) wrap their Refresh/Clear in `.refresh-wrap` / `.action-wrap`
+- `@media (max-width: 1000px)` hides those wraps + auxiliary text ("Updated Ns ago", "N running · M total")
+- Refresh/Clear remain available via Cmd+R or per-row actions
+- List rows on Trending + Library get two-tier responsive column drops:
+  - `@media (max-width: 880px)` drops the trailing 5th column (installed pill / outdated badge)
+  - `@media (max-width: 720px)` drops the middle secondary column (Installs / Version)
+  - `# / NAME / TYPE` always visible regardless of width
+- Plus `overflow: hidden` + `min-width: 0` on every header/row cell so column-header text can't bleed across cells (fixes the NAVME/INVPALLS glyph collision at narrow widths)
+
+**Pillgroup style unified**
+- Trending + Library `.pillgroup` lose the hard border; now uses sunken background only (matches the new TopBar group pattern)
+
+**PackageDetail rework**
+- h1 renders `enriched?.friendlyName ?? ui.selectedPackage.name`:
+  - AI on + enrichment has friendlyName → friendly version is the title; raw token moves to a new "Token" meta row at the top of the dl
+  - AI off OR no enrichment → raw token stays as h1 (legacy)
+- Type pill right-aligned via `margin-left: auto`
+- Close X stays flush at the right edge (now that the global padding-right reserve is scoped to `.content`)
+- AI-enriched badge removed from h1 — provenance still surfaces on summary / use_cases / similar / tags lower in the body
+- Detail header bottom-border aligns with main panel-head separator to the pixel
+
+**Settings → Brew analytics parser widened**
+- `parse_analytics_state` now accepts `[<backend>] [a|A]nalytics are [en|dis]abled[.]` — fixes modern brew's `"InfluxDB analytics are enabled."` output that the original strict matcher rejected as `Internal` error
+- Removed redundant `toast.error(...)` on load failure — inline error block already shows the message; toast was stacking
+- +3 tests pinning InfluxDB + arbitrary-backend variants
+
+**GitHub sign-in friendlier error**
+- `start_device_flow` fails fast with a clear "GitHub sign-in is not configured in this build. See BUILD.md → 'GitHub OAuth App (one-time setup before release)'" message when `GITHUB_OAUTH_CLIENT_ID` is still `Iv1.PLACEHOLDER_REPLACE_BEFORE_RELEASE`
+- `github` store uses `brewErrorMessage(e)` instead of `e.code` so the human message reaches the modal
+- DeviceFlowModal drops its redundant `toast.error` on error state — modal renders the message inline
+
+**Other small fixes**
+- Detail panel closes on any sidebar navigation — `ui.setSection(s)` now also clears `ui.selectedPackage`
+- Pillgroup border removed (matches new TopBar pattern)
 
 ## Tests & lint (current)
 
-- `cargo test`: **334 passed**, 0 failed, 6 ignored
+- `cargo test`: **411 passed**, 0 failed, 6 ignored
 - `cargo clippy --all-targets -- -D warnings`: clean
 - `cargo check`: clean
 - `npm run check`: 0 errors, 1 pre-existing tsconfig-node warning
 - `npm run build`: clean
 
-## What's left
+## What's queued for the next session (post-compact)
 
-| Sub-phase | Status |
-|-----------|--------|
-| 12f — GitHub authed actions (star/unstar/is_starred/watch/unwatch/create_issue + "Wrong?" link + Dashboard personal-stats card) | next |
-| Phase 13 — Catalog enrichment (Haiku Tier A friendly names + summaries, then Tier B use cases + similar + tags, AI Features master toggle, full plan in `phase13-plan.md`) | queued, can run parallel with 12f |
-| Recipes (Phase 10) | deferred — depends on catalog (now available), pairs naturally with enrichment |
-| `installedAt` on Package + Last-Updated sort | small standalone backend addition, not in any phase |
-| Tier B Tahoe Liquid Glass (Swift bridge) | v0.2 |
-| Phase 14 — bundled cask icons | **explicitly DROPPED** — trademark/redistribution concern raised; runtime probe with paranoid gate is sufficient |
+Per the user's plan at compact: **security audit → GitHub OAuth App setup → more UI polish**.
+
+1. **Security audit re-run** against the new code (cargo audit, cargo deny check, npm audit --omit=dev, semgrep, gitleaks). Especially: new `keyring` dep, new `url` dep, new `flate2` dep, `window-vibrancy` dep, native menu code, paranoid-mode wiring, settings persistence, GitHub OAuth flow, enrichment lookup
+2. **GitHub OAuth App** — create on github.com/settings/apps with Device Flow enabled, copy client_id, replace `GITHUB_OAUTH_CLIENT_ID` placeholder in `src-tauri/src/github/auth.rs`. Test end-to-end: sign in → status reflects @username → star a package → file an issue → sign out
+3. **More UI polish** — open. Probably:
+   - Sticky/frozen # + NAME columns at narrow widths (user proposed; deferred from this session)
+   - Snapshots panel-head responsive treatment (Import + New Snapshot — primary actions, need icon-only at narrow widths not full hide)
+   - Real screenshots per `visualStory.md`
+   - Tier B enrichment run (use_cases + similar + tags, ~$15)
+   - Address any remaining `codeReview.md` / `accessibility.md` nits
 
 ## Memory bank inventory
 
-`toc.md`, `projectbrief.md`, `techContext.md`, `decisions.md`, `activeContext.md` (this), `progress.md`, `systemPatterns.md`, `designSystem.md`, `uxArchitecture.md`, `backendApi.md`, `frontendComponents.md`, `codeReview.md`, `apiTests.md`, `accessibility.md`, `visualStory.md`, `security.md`, `ideas.md`, `phase12-plan.md`, `phase13-plan.md`, `agentLog.md`, `NEXT-SESSION.md`, `scans/{phase12-security-review.md, ...other scans}`, `tasks/2026-05/`.
-
-Also new and uncommitted: `PHILOSOPHY.md` (271 lines, root) — project manifesto added by user during session.
+`toc.md`, `projectbrief.md`, `techContext.md`, `decisions.md`, `activeContext.md` (this), `progress.md`, `systemPatterns.md`, `designSystem.md`, `uxArchitecture.md`, `backendApi.md`, `frontendComponents.md`, `codeReview.md`, `apiTests.md`, `accessibility.md`, `visualStory.md`, `security.md`, `ideas.md`, `phase12-plan.md`, `phase13-plan.md`, `agentLog.md`, `NEXT-SESSION.md`, `scans/{phase12-security-review.md, ...}`, `tasks/2026-05/`.

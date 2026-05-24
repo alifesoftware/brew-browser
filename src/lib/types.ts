@@ -199,6 +199,89 @@ export interface BrewfileCheckReport {
 }
 
 // =========================================================
+// 2.9.0 Catalog (Phase 12a)
+// =========================================================
+
+/**
+ * Lightweight summary of the active catalog. Returned by
+ * `catalog_summary` and `catalog_refresh`. Used by the Dashboard
+ * catalog line + Discover stale-catalog banner.
+ *
+ * Wire shape matches the Rust `CatalogSummary` struct (camelCase).
+ */
+export interface CatalogSummary {
+  /** ISO 8601 UTC timestamp of the catalog's `as_of` field. */
+  asOf: string;
+  /** Which copy of the catalog is currently active. */
+  source: "bundled" | "user-refreshed";
+  formulaCount: number;
+  caskCount: number;
+  /** Days between `asOf` and now (UTC). Clamped to 0 on clock skew. */
+  daysOld: number;
+}
+
+/**
+ * Light per-entry record returned by `catalog_formulae_summary` and
+ * `catalog_casks_summary`. Used for fast list views that only need
+ * name + desc + flags.
+ */
+export interface CatalogEntrySummary {
+  name: string;
+  desc: string | null;
+  deprecated: boolean;
+  disabled: boolean;
+}
+
+/**
+ * Full formula record from the bundled / user-refreshed catalog.
+ * Mirrors the Rust `Formula` struct in `src-tauri/src/catalog/mod.rs`.
+ * Nullable fields are skipped on the wire when `None` (per
+ * `skip_serializing_if = "Option::is_none"`), so consumers must accept
+ * `undefined` in addition to `null` and treat both as "not set".
+ */
+export interface Formula {
+  name: string;
+  fullName: string;
+  desc: string | null;
+  homepage: string | null;
+  /** Flattened to a single SPDX string by the backend deserializer. */
+  license: string | null;
+  deprecated: boolean;
+  deprecationDate: string | null;
+  deprecationReason: string | null;
+  disabled: boolean;
+  disableDate: string | null;
+  disableReason: string | null;
+  dependencies: string[];
+  recommendedDependencies: string[];
+  optionalDependencies: string[];
+  conflictsWith: string[];
+  /** Just the `stable` version string from upstream `versions: {...}`. */
+  versionsStable: string | null;
+  tap: string;
+  aliases: string[];
+}
+
+/**
+ * Full cask record from the bundled / user-refreshed catalog. Mirrors
+ * the Rust `Cask` struct.
+ */
+export interface Cask {
+  token: string;
+  /** Pretty display name(s). Casks routinely have multiple; the first
+      is the canonical one. */
+  name: string[];
+  desc: string | null;
+  homepage: string | null;
+  deprecated: boolean;
+  deprecationDate: string | null;
+  deprecationReason: string | null;
+  disabled: boolean;
+  version: string | null;
+  tap: string;
+}
+
+// =========================================================
 // 2.9.1 Categories (Phase 9)
 // =========================================================
 

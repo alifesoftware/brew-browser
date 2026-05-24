@@ -581,28 +581,26 @@
     aria-label="Package detail"
     style="--detail-pane-width: {ui.detailPaneWidth}px"
   >
-    <header>
-      <div class="head-left">
-        <div class="title-stack">
-          <h1 bind:this={headingEl} tabindex="-1">{ui.selectedPackage.name}</h1>
-          {#if enriched?.friendlyName}
-            <!-- Phase 13: friendly name appears below the canonical
-                 token as a smaller subtitle. The "AI-enriched" suffix
-                 carries a tooltip explaining provenance. -->
-            <small
-              class="enriched-subtitle"
-              title="Generated at build time by Claude Haiku 4.5 — see Settings &rarr; Appearance to disable"
-            >
-              {enriched.friendlyName}
-              <span class="ai-badge">
-                <Sparkles size={10} aria-hidden="true" />
-                AI-enriched
-              </span>
-            </small>
-          {/if}
-        </div>
-        <Pill tone={ui.selectedPackage.kind === "formula" ? "formula" : "cask"}>{ui.selectedPackage.kind}</Pill>
-      </div>
+    <header class="panel-head">
+      <!--
+        Header title rules (Phase 13.b rework):
+        - AI features ON + enrichment has friendlyName: friendlyName is the
+          h1; the raw token moves DOWN into the meta list as a `Token` row.
+        - AI features OFF or no enrichment entry: raw `ui.selectedPackage.name`
+          is the h1 (legacy behavior).
+        Type pill is right-aligned via `margin-left: auto` so it always pins
+        to the right edge regardless of title length.
+      -->
+      <!-- AI-enriched badge intentionally NOT shown next to the title.
+           The friendly name is the title (when AI is on); the raw token
+           still appears in the meta `Token` row below, so users always
+           see both. AI provenance is documented in Settings → Appearance.
+           Per-field "AI-enriched" badges still appear on summary / use
+           cases / similar packages / tags lower in the body. -->
+      <h1 bind:this={headingEl} tabindex="-1" class="detail-title">
+        {enriched?.friendlyName ?? ui.selectedPackage.name}
+      </h1>
+      <Pill tone={ui.selectedPackage.kind === "formula" ? "formula" : "cask"}>{ui.selectedPackage.kind}</Pill>
       <button class="close" aria-label="Close detail panel" onclick={close} title="Close (Esc)">
         <X size={16} />
       </button>
@@ -618,6 +616,17 @@
         </div>
       {:else if detail && pkg}
         <dl class="meta">
+          {#if enriched?.friendlyName}
+            <!-- AI is on AND enrichment has a friendlyName, so the h1
+                 above shows the friendly version. Surface the canonical
+                 token here so it doesn't disappear from the UI. When AI
+                 is off, enriched is null so this row doesn't render and
+                 the h1 falls back to the raw token (legacy behaviour). -->
+            <div>
+              <dt>Token</dt>
+              <dd class="mono">{ui.selectedPackage.name}</dd>
+            </div>
+          {/if}
           <div>
             <dt>Installed</dt>
             <dd>{pkg.installedVersion ?? "Not installed"}</dd>
@@ -1085,20 +1094,32 @@
     .detail { animation: none; }
   }
 
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--space-4);
-    border-bottom: 1px solid var(--color-border);
-    gap: var(--space-3);
+  /* Local rules for the detail header. The shared `.panel-head` baseline
+     (in app.css) pins height, padding, border-bottom, and h1 typography
+     so the detail header separator lines up with every main panel head
+     to the pixel. We only customise: the title's truncation + AI-enriched
+     badge, the type pill's right-alignment, and the close button. */
+  .detail-title {
+    /* Truncate long friendly names so they don't push the type pill off */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
   }
-  .head-left { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
-  h1 { font-size: var(--text-h1); font-weight: var(--fw-semibold); }
   /* h1 receives programmatic focus when the slide-over opens (a11y).
      Suppress its focus ring — the slide-in animation + panel context are the visual cue;
      the ring on a non-interactive heading would be misleading. */
-  h1:focus { outline: none; box-shadow: none; }
+  .detail-title:focus { outline: none; box-shadow: none; }
+
+  /* Type pill (formula/cask) pushed to the right of the title via
+     auto margin. Sits flush against the close button. */
+  .panel-head :global(.pill) {
+    margin-left: auto;
+  }
+
   .close { color: var(--color-text-muted); padding: 4px; border-radius: var(--radius-sm); }
   .close:hover { background: var(--color-surface-sunken); color: var(--color-text-primary); }
 
@@ -1419,22 +1440,6 @@
   }
 
   /* ── Phase 13 — enriched metadata visuals ── */
-
-  /* Subtitle stack under the package token in the header. */
-  .title-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-  .enriched-subtitle {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: var(--text-body-sm);
-    color: var(--color-text-secondary);
-    cursor: help;
-  }
 
   /* "AI-enriched" badge — small, inline, semantic. */
   .ai-badge {

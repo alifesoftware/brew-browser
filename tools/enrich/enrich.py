@@ -561,7 +561,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    load_dotenv(SCRIPT_DIR / ".env")
+    # Cascade .env lookup: tool-local first (override), then sibling categorize
+    # tool's .env (shared Anthropic key by design — both tools talk to the same
+    # API), then process env (CI/explicit export). Same creds either way.
+    load_dotenv(SCRIPT_DIR / ".env", override=False)
+    load_dotenv(SCRIPT_DIR.parent / "categorize" / ".env", override=False)
     parser = build_parser()
     args = parser.parse_args()
 
@@ -585,8 +589,10 @@ def main() -> int:
     if not dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit(
             "ANTHROPIC_API_KEY not set.\n"
-            "Copy tools/enrich/.env.example to tools/enrich/.env and paste your key, "
-            "or pass --dry-run to compute diff + cost without calling the API."
+            "Looked in: tools/enrich/.env, tools/categorize/.env, process env.\n"
+            "Set it in either tools/enrich/.env (tool-local) or tools/categorize/.env "
+            "(shared by both tools), or pass --dry-run to compute diff + cost without "
+            "calling the API."
         )
 
     log("=== brew-browser enrich ===")

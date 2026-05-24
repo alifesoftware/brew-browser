@@ -317,10 +317,19 @@ pub fn initialize<R: tauri::Runtime>(
     // Spawn the catalog upgrade. The handle is registered above, so
     // pulling it out of `app.state()` here gives us the same Arc-shared
     // value the commands will see.
+    //
+    // After the upgrade attempt, run the auto-refresh check
+    // (Phase 13 — Finding 2). It returns immediately when the user has
+    // not opted in (`catalog_auto_refresh = Off`, the default) so the
+    // happy-path startup cost is one settings RwLock read + one Arc
+    // clone — well under a millisecond. Both run on the same background
+    // task to keep the order deterministic (upgrade first so the
+    // auto-refresh sees the freshest known `as_of` before deciding).
     let app_handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
         let state: tauri::State<AppState> = app_handle.state();
         state.upgrade_catalog_from_user_data().await;
+        crate::commands::catalog::maybe_auto_refresh_catalog(&state).await;
     });
 
     Ok(())

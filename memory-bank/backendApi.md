@@ -1106,3 +1106,105 @@ These don't block the spec; they're micro-decisions for the implementer that don
 ---
 
 *End of spec. Wave 2 implementation begins from this file.*
+
+---
+
+## 13. Phase 9 + 11 + 12 + 13 commands
+
+**Author:** Technical Writer (post-implementation pass, 2026-05-24 evening)
+**Scope:** Tauri commands shipped after the original spec (Phase 9 categories, Phase 11 Dashboard/Services/Disk, Phase 12a–12f Catalog/Settings/GitHub, Phase 13 enrichment).
+**Note:** Phase 11 disk + services commands landed in commit `84ad010` (slightly before this Phase 12 cluster) but were not in the original spec; they're included here for completeness.
+
+All commands are registered in `src-tauri/src/lib.rs` via `tauri::generate_handler!` and re-exported through `src-tauri/src/commands/mod.rs`. Each row notes whether the command consults `state.require_network(feature)` — the single paranoid-mode chokepoint introduced by Phase 12d.
+
+### 13.1 Phase 9 — Categories
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `categories_data` | `async fn categories_data(state) -> Result<Arc<CategoriesData>, BrewError>` | Returns the full categories.json payload (838 KB embedded via `include_str!`). Memoised on `AppState.categories_cache` so the parse happens once per process. | no (bundled, no I/O) | none | `commands/categories.rs:41` |
+
+### 13.2 Phase 11 — Disk usage
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `disk_usage` | `async fn disk_usage(state) -> Result<DiskUsageReport, BrewError>` | Returns sizes for Cellar / Caskroom / var/log / cache via parallel `du -sk` calls (`tokio::join!`). 60s cache on `AppState.disk_usage_cache`. | no (local FS only) | none | `commands/disk_usage.rs:109` |
+| `disk_usage_clear_cache` | `async fn disk_usage_clear_cache(state) -> Result<(), BrewError>` | Invalidates the 60s cache so the next `disk_usage` re-runs `du`. Backs the Dashboard Refresh button. | no | none | `commands/disk_usage.rs:195` |
+| `open_in_finder` | `async fn open_in_finder(path: String, state) -> Result<(), BrewError>` | Reveals a path in Finder via `/usr/bin/open -R`. Canonicalises the target and the Homebrew prefix + cache roots, then enforces the target is inside one of them — blocks attempted reveals of `/etc/passwd` or `~/.ssh/`. | no | none | `commands/disk_usage.rs:202` |
+
+### 13.3 Phase 11b — Services
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `services_list` | `async fn services_list(state) -> Result<Arc<Vec<Service>>, BrewError>` | Shells `brew services list --json` and parses. 5s cache on `AppState.services_cache`. | no | none | `commands/services.rs:56` |
+| `services_clear_cache` | `async fn services_clear_cache(state) -> Result<(), BrewError>` | Drops the 5s cache so the next list re-shells `brew services list`. | no | none | `commands/services.rs:78` |
+| `services_start` | `async fn services_start(name: String, state) -> Result<(), BrewError>` | Shells `brew services start <name>`. Takes the write lock (launchctl state mutation). Validates the service name against `^[A-Za-z0-9._\-+@]{1,128}$` even though argv passing is shell-safe — defense in depth. | no | none | `commands/services.rs:124` |
+| `services_stop` | `async fn services_stop(name: String, state) -> Result<(), BrewError>` | Shells `brew services stop <name>`. Same validator + lock. | no | none | `commands/services.rs:129` |
+| `services_restart` | `async fn services_restart(name: String, state) -> Result<(), BrewError>` | Shells `brew services restart <name>`. Same validator + lock. | no | none | `commands/services.rs:134` |
+
+### 13.4 Phase 12a — Bundled catalog + refresh
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `catalog_summary` | `async fn catalog_summary(state) -> Result<CatalogSummary, BrewError>` | Returns `{ as_of, source: "bundled" \| "user-refreshed", formula_count, cask_count, days_old }` for the currently active catalog. | no (in-memory) | none | `commands/catalog.rs:106` |
+| `catalog_refresh` | `async fn catalog_refresh(state) -> Result<CatalogSummary, BrewError>` | Fetches both `formula.json` and `cask.json` from `formulae.brew.sh`, gzip-compresses, atomic-writes to `app_data_dir/catalog/`, reloads, swaps the AppState Arc. Single-flight via `try_lock` (second click → `InvalidArgument` "already in progress"). 60s reqwest timeout. 64 MiB streaming raw cap. | **yes** ("catalog_refresh") | none | `commands/catalog.rs:112` |
+| `catalog_lookup_formula` | `async fn catalog_lookup_formula(name: String, state) -> Result<Option<Formula>, BrewError>` | HashMap lookup against the active catalog. `validate_package_name` gates the input even though the read is in-memory (defense-in-depth uniform validator). | no | none | `commands/catalog.rs:189` |
+| `catalog_lookup_cask` | `async fn catalog_lookup_cask(name: String, state) -> Result<Option<Cask>, BrewError>` | HashMap lookup for casks. Uses the stricter `validate_cask_token` (rejects `/`, leading `.`, `..` segments). | no | none | `commands/catalog.rs:202` |
+| `catalog_formulae_summary` | `async fn catalog_formulae_summary(state) -> Result<Vec<CatalogEntrySummary>, BrewError>` | Light shape `{name, desc, deprecated, disabled}` for every formula, sorted alphabetically. Backs Discover search. | no | none | `commands/catalog.rs:212` |
+| `catalog_casks_summary` | `async fn catalog_casks_summary(state) -> Result<Vec<CatalogEntrySummary>, BrewError>` | Same shape for casks. | no | none | `commands/catalog.rs:232` |
+
+### 13.5 Phase 12b — Brew analytics + app version
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `brew_get_analytics` | `async fn brew_get_analytics(state) -> Result<bool, BrewError>` | Shells `brew analytics state`, parses first stdout line only with strict match (handles trailing-period and non-period variants brew has shipped). Returns `true` when analytics enabled. | no | none | `commands/brew_env.rs:48` |
+| `brew_set_analytics` | `async fn brew_set_analytics(enabled: bool, state) -> Result<(), BrewError>` | Shells `brew analytics on\|off`. Takes the write lock — brew mutates its config files. | no | none | `commands/brew_env.rs:60` |
+| `app_version` | `fn app_version<R: Runtime>(app: AppHandle<R>) -> String` | Returns the app's version from `tauri::App::package_info().version`. Synchronous, no I/O. Avoids a renderer-side `package.json` read that would require an `fs:*` capability. | no | none | `commands/brew_env.rs:77` |
+
+### 13.6 Phase 12d — Settings persistence
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `settings_get` | `async fn settings_get(state) -> Result<Settings, BrewError>` | Returns the in-memory cached settings. `FirstLaunch` → defaults, `Corrupt` → `BrewError::Internal` so the UI can surface a reset prompt. | no | none | `commands/settings.rs:400` |
+| `settings_set` | `async fn settings_set(settings: Settings, state) -> Result<Settings, BrewError>` | Validates, clamps, atomic-writes to `app_data_dir/settings.json`, updates in-memory cache. Returns the clamped settings (frontend sees what was actually written). | no | none | `commands/settings.rs:415` |
+| `settings_reset` | `async fn settings_reset(state) -> Result<Settings, BrewError>` | Overwrites with `Settings::default()`. Used by the corrupt-file recovery affordance in Settings → Network. | no | none | `commands/settings.rs:431` |
+
+### 13.7 Phase 12c + 12e — GitHub anonymous + Device Flow
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `github_repo_stats` | `async fn github_repo_stats(homepage: String, state) -> Result<Option<RepoStats>, BrewError>` | Fetches stars / forks / last release / archived state for a GitHub-hosted package homepage. Two gates: Settings `github_enabled` (defaults false) short-circuits to `Ok(None)`, then `require_network`. URL allowlist via `parse_github_url`. 24h disk cache. | **yes** ("github_repo_stats") | optional (uses Keychain token if present to lift 60→5000/hr rate limit) | `commands/github.rs:39` |
+| `github_status` | `async fn github_status(state) -> Result<GithubStatusDto, BrewError>` | Returns `{ signed_in, username, scopes }` from Keychain. **No token ever crosses IPC.** No network. | no (Keychain only) | reads Keychain | `commands/github.rs:88` |
+| `github_signin_start` | `async fn github_signin_start(state) -> Result<DeviceFlowStart, BrewError>` | POSTs `client_id` + scope to `github.com/login/device/code`. Returns `{ device_code, user_code, verification_uri, expires_in, interval }`. | **yes** ("github_signin") | none (start of flow) | `commands/github.rs:98` |
+| `github_signin_poll` | `async fn github_signin_poll(device_code: String, state) -> Result<PollResultDto, BrewError>` | POSTs to `github.com/login/oauth/access_token`. Returns `Pending`, `SlowDown`, `Success { username, scopes }`, `Denied`, `Expired`. On success, writes the token + scopes to Keychain. | **yes** ("github_signin") | none (writes Keychain on success) | `commands/github.rs:111` |
+| `github_signout` | `async fn github_signout(state) -> Result<(), BrewError>` | Deletes both Keychain entries (`github_access_token`, `github_access_scopes`). Pure local reduction of state — not gated by paranoid mode. | no | deletes Keychain | `commands/github.rs:123` |
+
+### 13.8 Phase 12f — GitHub authed actions
+
+All six commands share the `authed_gate` helper in `commands/github.rs:152` which enforces, in order: paranoid → URL allowlist → token-from-Keychain → `public_repo` scope check → client build. None of these calls touch the network until the gate chain passes.
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `github_star` | `async fn github_star(homepage: String, state) -> Result<(), BrewError>` | PUT `/user/starred/{owner}/{repo}`. 204 = success. | **yes** ("github_star") | AuthRequired + ScopeRequired(`public_repo`) | `commands/github.rs:188` |
+| `github_unstar` | `async fn github_unstar(homepage: String, state) -> Result<(), BrewError>` | DELETE same path. 204 = success (idempotent). | **yes** ("github_unstar") | same | `commands/github.rs:197` |
+| `github_is_starred` | `async fn github_is_starred(homepage: String, state) -> Result<bool, BrewError>` | GET same path. 204 = starred, 404 = not. Backs the toggle button's initial state. | **yes** ("github_is_starred") | same | `commands/github.rs:206` |
+| `github_watch` | `async fn github_watch(homepage: String, state) -> Result<(), BrewError>` | PUT `/repos/{owner}/{repo}/subscription` with `{subscribed: true, ignored: false}`. | **yes** ("github_watch") | same | `commands/github.rs:215` |
+| `github_unwatch` | `async fn github_unwatch(homepage: String, state) -> Result<(), BrewError>` | DELETE same. | **yes** ("github_unwatch") | same | `commands/github.rs:224` |
+| `github_create_issue` | `async fn github_create_issue(homepage: String, title: String, body: String, labels: Vec<String>, state) -> Result<CreatedIssue, BrewError>` | POST `/repos/{owner}/{repo}/issues`. Title ≤ 256 chars with control-char strip, body ≤ 64 KiB with null-byte strip, labels ≤ 10 entries matching `^[A-Za-z0-9_./-]+$`. Returns `{ number, html_url }`. | **yes** ("github_create_issue") | same | `commands/github.rs:233` |
+
+### 13.9 Phase 13 — Enrichment
+
+| Command | Signature | Purpose | Paranoid gate | Auth | Source |
+|---|---|---|---|---|---|
+| `enrichment_data` | `async fn enrichment_data(state) -> Result<Arc<EnrichmentData>, BrewError>` | Returns the full bundled enrichment payload. Memoised on `AppState.enrichment_cache` — subsequent calls return an Arc clone, not a re-parse. Zero runtime LLM calls; the bundle is `include_bytes!`d at compile time. | no (bundled) | none | `commands/enrichment.rs:23` |
+| `enrichment_lookup` | `async fn enrichment_lookup(name: String, state) -> Result<Option<EnrichmentEntry>, BrewError>` | Per-token lookup. `validate_package_name` gates the input. Returns `None` when the token is missing (placeholder bundle, unmapped package). | no | none | `commands/enrichment.rs:43` |
+
+### 13.10 New error variants
+
+The session added five typed error variants to `BrewError` (in `src-tauri/src/error.rs`), all serialised as tagged JSON the frontend can switch on:
+
+- `ParanoidModeBlocked { feature: String }` — emitted by every gated command when `require_network` denies. Frontend toast routes by `feature`.
+- `GithubRateLimited { reset_at: i64 }` — emitted when GitHub returns `403` + `X-RateLimit-Remaining: 0`. `reset_at` is the unix timestamp. **No retry, no backoff** — callers honour the server's reset window.
+- `KeychainUnavailable { message: String }` — emitted when the macOS Keychain returns an error. No disk fallback. Frontend surfaces "Keychain unavailable — sign in unavailable until repaired".
+- `AuthRequired` — emitted by Phase 12f action commands when no token is in the Keychain. No network attempt is made.
+- `ScopeRequired { scope: String }` — emitted when the cached scopes from sign-in don't include the requested scope (currently always `public_repo` for 12f actions).
+

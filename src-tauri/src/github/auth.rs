@@ -406,6 +406,20 @@ struct DeviceCodeResponse {
 /// does that via repeated `poll_device_flow` calls. We just hand back
 /// the opaque `device_code` the frontend needs to drive polling.
 pub async fn start_device_flow() -> Result<DeviceFlowStart, BrewError> {
+    // Fail fast when the client_id is still the build-time placeholder.
+    // Without this guard, GitHub rejects the device-code request with an
+    // opaque 4xx and the frontend modal sits forever on "Contacting GitHub…"
+    // waiting for a device_code that was never minted.
+    //
+    // To fix in your build: see `BUILD.md` → "GitHub OAuth App (one-time
+    // setup before release)". The 7-step flow on github.com/settings/apps
+    // gives you a real client_id to replace `GITHUB_OAUTH_CLIENT_ID` with.
+    if GITHUB_OAUTH_CLIENT_ID.contains("PLACEHOLDER") {
+        return Err(BrewError::Internal {
+            message: "GitHub sign-in is not configured in this build. The OAuth App client_id is still the placeholder — see BUILD.md → 'GitHub OAuth App (one-time setup before release)'.".to_string(),
+        });
+    }
+
     let client = build_oauth_client()?;
     let scope = GITHUB_OAUTH_SCOPES.join(" ");
     let form = [

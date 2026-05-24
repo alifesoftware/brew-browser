@@ -90,9 +90,10 @@
       const t = setTimeout(() => github.cancelSignin(), 2000);
       return () => clearTimeout(t);
     }
-    if (s.kind === "error") {
-      toast.error("Sign-in failed", s.message);
-    }
+    // NOTE: `error` state intentionally does NOT toast — the modal renders
+    // the message inline (see {:else if signinState.kind === "error"} below),
+    // and clicking Sign in again would otherwise spawn a new toast per
+    // attempt, stacking them up the right edge of the window.
   });
 
   function onCancel() {

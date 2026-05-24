@@ -28,10 +28,12 @@
   <header class="panel-head" data-tauri-drag-region>
     <h1>Activity</h1>
     {#if activity.jobs.length > 0}
-      <Button size="sm" variant="ghost" onclick={() => activity.clearCompleted()}>
-        {#snippet icon()}<Trash2 size={14} />{/snippet}
-        Clear completed
-      </Button>
+      <span class="action-wrap">
+        <Button size="sm" variant="ghost" onclick={() => activity.clearCompleted()}>
+          {#snippet icon()}<Trash2 size={14} />{/snippet}
+          Clear completed
+        </Button>
+      </span>
     {/if}
   </header>
 
@@ -71,6 +73,14 @@
     display: flex; justify-content: space-between; align-items: center;
     padding: var(--space-4);
     border-bottom: 1px solid var(--color-border);
+  }
+
+  /* Narrow-window responsive: same pattern as Trending + Library + Services.
+     Drop the "Clear completed" action when the panel-head crowds the
+     TopBar's reserved 96 px on the right. The action stays available by
+     clearing individual jobs from the rows themselves. */
+  @media (max-width: 1000px) {
+    .action-wrap { display: none; }
   }
   .list-wrap { flex: 1; overflow-y: auto; min-height: 0; }
   .list { display: flex; flex-direction: column; }
