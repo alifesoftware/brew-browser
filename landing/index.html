@@ -122,7 +122,7 @@
 
         <div class="feature">
           <h3>Discover</h3>
-          <p>Search the full Homebrew package index (15,725 packages, bundled at build time) by name or by the 19-category tile grid. AI-curated friendly names and summaries baked in — zero LLM calls at runtime.</p>
+          <p>Search the full Homebrew package index (16,028 packages, bundled at build time) by name or by the 19-category tile grid. 15,725 of those carry AI-curated friendly names and summaries baked in at build time — zero LLM calls at runtime.</p>
         </div>
 
         <div class="feature">
@@ -146,6 +146,11 @@
         </div>
 
         <div class="feature">
+          <h3>Updates</h3>
+          <p>A title-bar pill quietly tells you when a newer brew-browser version exists. Every artifact is verified end-to-end against an embedded minisign public key before a single byte hits your disk. Daily auto-check is off by default; you opt in.</p>
+        </div>
+
+        <div class="feature">
           <h3>Native &amp; fast</h3>
           <p>Tauri 2 native shell, system WebView, native macOS title bar with traffic-light alignment. Cmd+K command palette, Cmd+0…6 to jump between sections, persistent type-ahead search in the sidebar, drag-resizable detail pane, collapsible sidebar.</p>
         </div>
@@ -157,12 +162,12 @@
       <h2>Open by default</h2>
       <ul class="posture">
         <li><strong>MIT licensed.</strong> Use it however you want.</li>
-        <li><strong>Full source.</strong> 22 Rust files + 36 Svelte/TypeScript files. Read every line.</li>
+        <li><strong>Full source.</strong> 41 Rust files + 63 Svelte/TypeScript files. Read every line.</li>
         <li><strong>No CLA.</strong> Your contributions stay yours.</li>
         <li><strong>No EULA.</strong> No click-through to use the app.</li>
         <li><strong>No telemetry.</strong> No analytics, no crash reporting, no third-party pixels.</li>
         <li><strong>No accounts.</strong> No sign-in, no cloud sync, no required services.</li>
-        <li><strong>No surprise network.</strong> Four documented outbound paths: Homebrew's analytics for Trending, cask homepage probes for icons (SSRF-filtered), <code>brew</code> itself for installs, and your default browser when you click a package's homepage.</li>
+        <li><strong>No surprise network.</strong> Every outbound call is documented and gated. Nine paths total — Homebrew's analytics for Trending, the catalog refresh, cask homepage probes (SSRF-filtered), GitHub repo stats, GitHub OAuth + authed actions when you opt in, <code>brew</code> itself, your default browser, the updater manifest, and the signed updater artifact. Full enumeration in the <a href="https://github.com/msitarzewski/brew-browser/blob/main/README.md#open-source-posture">README network posture</a>. Flip on <strong>Offline Mode</strong> in Settings to block them all in one click.</li>
       </ul>
     </section>
 
