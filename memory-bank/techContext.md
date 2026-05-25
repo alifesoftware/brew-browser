@@ -13,9 +13,11 @@
 | Async runtime | `tokio` (process, io-util, rt-multi-thread, macros, sync) | 1.x |
 | Serde | `serde`, `serde_json` | 1.x |
 | Tauri opener plugin | `tauri-plugin-opener` | 2.x |
-| HTTP (for trending) | TBD — `reqwest` blocking or `tauri-plugin-http` | — |
-| Styling | TBD (Tailwind v4 or plain CSS) | — |
-| Test framework | TBD | — |
+| HTTP (for trending + GitHub + catalog + updater) | `reqwest` (async, with `rustls-tls` + `webpki-roots` features — no system trust store dependency) | 0.12.x |
+| Styling | Plain CSS + design tokens (`src/lib/styles/tokens.css`, `typography.css`, `reset.css`). No utility framework; small custom system per `designSystem.md`. | — |
+| Test framework — backend | Rust built-in: `#[test]` for unit, `#[tokio::test]` for async, `#[ignore]` for integration tests that shell out to `brew`. 473 unit tests at v0.3.0. | (stdlib) |
+| Test framework — frontend | `svelte-check` against the SvelteKit + TS sources (typecheck only — no Vitest yet; backend is the load-bearing test surface). | 4.x |
+| Crypto (updater signature verification) | minisign via `tauri-plugin-updater` 2.x; embedded `UPDATER_PUBKEY` const in `src-tauri/src/lib.rs` | 2.10.x |
 
 ## Host environment
 

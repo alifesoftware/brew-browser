@@ -101,13 +101,25 @@ Phase 12 grew out of two user prompts:
 - ✅ **GitHub Device Flow + Keychain sign-in** — Phase 12e shipped, token never returned to frontend, never written to disk, never logged
 - ❌ **Phase 14 bundled cask icons** — DROPPED per `decisions.md`; trademark/redistribution risk too real to justify the small UX win
 
+## Resolved since (v0.2.0 → v0.3.0)
+
+- ✅ **Phase 12f — GitHub authed actions** — shipped in v0.2.0. Star/unstar/is_starred/watch/unwatch/create_issue all wired with the `authed_gate(scope)` per-action gate. "Wrong?" link on Categories row. Dashboard personal-stats card live ("X of Y installed packages starred"). Plus the Phase 17 expansion: package resolution now walks `homepage` → `urls.stable.url` → `urls.head.url` (formula) or `homepage` → `url` (cask), so packages like `bat`, `fd`, `ripgrep` with marketing-page homepages now qualify.
+- ✅ **Phase 13 — Catalog enrichment** — Tier A (friendly names + summaries) shipped + bundled (15,725 entries, ~750 KB gzipped). AI Features master toggle in Settings → Appearance. Tier B (use cases + similar + tags) deferred — ~$15 Anthropic API run-cost, hasn't been bought yet.
+- ✅ **Phase 15 — In-app updater + Offline Mode rename** — shipped in v0.3.0. Title-bar pill + Settings → Network → Updates subsection. Daily auto-check off by default. Every artifact verified against embedded minisign pubkey + manifest sha256 before any on-disk side effect. "Paranoid Mode" renamed to "Offline Mode" in all user-facing prose (internal `paranoid_mode` field unchanged to avoid a settings migration).
+- ✅ **Curated Upgrade UX (today)** — UpgradeModal mounted on Dashboard, lets the user pick a subset of outdated packages and runs `brew upgrade <a> <b> ...` as a single batched invocation streaming into the Activity drawer. Pinned packages are checkbox-disabled.
+- ✅ **Refresh button now does brew update + catalog refresh + installed reload** — earlier Refresh only refreshed the catalog index, leaving outdated flags stale relative to what brew itself knew about upstream. Now it's a true three-step sync.
+- ✅ **Report-to-brew-browser flow** — every error toast that comes from a typed `BrewError` now carries a "Report to brew-browser" action button that opens a pre-filled GitHub new-issue URL with brew + brew-browser versions, command, exit code, stderr excerpt, friendly message.
+
 ## Still open
 
-- Phase 12f — GitHub authed actions (star/unstar/is_starred/watch/unwatch/create_issue + "Wrong?" link + Dashboard personal-stats card)
-- Phase 13 — Catalog enrichment via Haiku (Tier A friendly names + summaries, Tier B use cases + similar + tags) with AI Features master toggle. Full spec at `phase13-plan.md`
-- Recipes (Phase 10) — paused, depends on catalog (now available)
-- `installedAt` on Package + Last-Updated sort — small standalone backend addition
-- Tier B Tahoe Liquid Glass via Swift bridge — v0.2
-- Real screenshots per `visualStory.md`
-- Categorize cron on Beast or umbp for daily delta
-- Build-error rates / reverse deps / dep-tree viz — natural follow-ups once catalog is in regular use (Phase 12a unlocks all of these)
+- **Recipes (Phase 10)** — paused, depends on Tier B enrichment (use cases + similar + tags) being baked. Promoted concept: curated 3-5 package combos by use case ("Web Dev Starter: node + git + watchman + httpie + jq").
+- **`installedAt` on Package + Last-Updated sort** — small standalone backend addition. 1-2 hour task.
+- **Tier B Tahoe Liquid Glass via Swift bridge** — Tauri 2 doesn't expose this directly; needs a small Swift FFI. Polish, not a missing feature. Deferred past v0.4.
+- **Tier B enrichment run** (~$15 Anthropic API cost). Unlocks "Why install this?", "Similar packages", "Tags" sections in PackageDetail — currently mostly empty.
+- **Daily / weekly categorize + enrich cron** on Beast or umbp — bundle is fresh enough at each release; cron becomes worth setting up when release cadence drops below monthly.
+- **Build-error rates / reverse deps / dep-tree viz** — natural follow-ups once catalog is in regular use.
+- **`brew tap msitarzewski/brew-browser`** for one-line `brew install --cask brew-browser`. Post-launch convenience.
+- **Octocat chip tooltip differentiation** — currently `notifications`-missing and `public_repo`-missing both render amber with the same tooltip. ~30min.
+- **localStorage flag for eager GitHub `loadStatus`** — re-introduces the v0.2.1 quiet-launch (zero Keychain prompt for non-signed-in users). ~15min.
+- **Persist updater `last_checked_at` to disk** — the 24h floor uses in-memory state only, so typical morning-open/evening-close usage never triggers auto-check. ~30min.
+- **Manifest URL allowlist enforcement** — documented as a defense in `security.md` §15 but not implementable through `tauri-plugin-updater 2.10.1` (no pre-fetch hook). Either implement when the plugin exposes the hook, or trim the claim from security.md.

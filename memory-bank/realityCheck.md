@@ -2,7 +2,11 @@
 
 **Owner:** Reality Checker
 **Date:** 2026-05-23
-**Reads:** all of `memory-bank/`, all of `src-tauri/src/`, all of `src/`, `README.md`, `PLAN.md`, `LICENSE`, `tauri.conf.json`, `capabilities/default.json`, plus live `cargo` + `npm` + `brew` output captured below.
+**Reads:** all of `memory-bank/`, all of `src-tauri/src/`, all of `src/`, `README.md`, `docs/PLAN.md` (was `PLAN.md` at root at the time), `LICENSE`, `tauri.conf.json`, `capabilities/default.json`, plus live `cargo` + `npm` + `brew` output captured below.
+
+> **v0.3.0 status (2026-05-25) — post-Wave-3 audit, this file's findings are now resolved.**
+> The one true showstopper called out below — `tauri-plugin-dialog` not registered — was wired immediately after this audit (`src-tauri/Cargo.toml:19` has `tauri-plugin-dialog = "2"` and `src-tauri/src/lib.rs:67` calls `.plugin(tauri_plugin_dialog::init())`). Snapshots Import/Export work end-to-end. The verdict at the time of this snapshot ("NEEDS-WORK") shipped as fixed in v0.1.0 and every subsequent release.
+> Project state has moved well past Wave 3: v0.1.0 → v0.2.0 → v0.2.1 → **v0.3.0** all shipped (signed, notarized, on GitHub Releases). 473 backend tests pass. The path references in this document point at `PLAN.md` at root; that file is now at `docs/PLAN.md` (moved 2026-05-25 per the docs reorganization). Historical narrative below is preserved unchanged so the audit trail stays honest.
 
 ---
 

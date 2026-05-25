@@ -1,9 +1,9 @@
 # Frontend Components — brew-browser
 
 **Owner:** Frontend Developer
-**Wave:** 2 — Implementation
-**Last updated:** 2026-05-23
-**Status:** initial inventory written alongside `npm run build` / `npm run check` clean
+**Wave:** 2 — Implementation (extended through Phases 9, 11, 12, 13, 15, 17)
+**Last updated:** 2026-05-25 (v0.3.0 ship — adds the Phase 15 updater UI + Phase 12+ Octocat chip + today's UpgradeModal)
+**Status:** inventory current as of `npm run build` / `npm run check` clean (0 errors, 3 pre-existing warnings)
 
 This file is the canonical inventory of Svelte 5 components in `src/lib/components/`. Format: name, file, props summary, state owned, notes.
 
@@ -210,6 +210,20 @@ Cmd+W and Cmd+Q are macOS defaults — not intercepted; the OS quits the single-
 - **Settings** mounts at z-index 81 (overlay + dialog) inside `+page.svelte` when `ui.settingsOpen === true`. Triggered by ⌘, keyboard shortcut, the sidebar gear icon, or any "Open Settings" deep link from an error state.
 - **DeviceFlowModal** mounts inside `SettingsSectionGitHub` when `github.signinState.kind !== "idle"`.
 - **IssueModal** mounts inside `PackageDetail` and is also reachable from the Categories row's "Wrong?" affordance when the user is signed in.
-- **All 6 SettingsSection\*** components are rendered inline by `Settings.svelte` based on `activeSection`; only one is mounted at a time.
+- **All 7 SettingsSection\*** components are rendered inline by `Settings.svelte` based on `activeSection`; only one is mounted at a time. (Network now contains the Phase 15 Updates subsection — see SettingsSectionUpdates below.)
 - **SortableHeader** is consumed by Library, Trending, and Services list grids.
+- **UpdateIndicator** mounts in `TitlebarControls.svelte` — only rendered when `updater.available !== null` AND Offline Mode is off.
+- **GithubMarkIcon (Octocat chip)** mounts in `TitlebarControls.svelte` — hidden when signed out, green when scope-complete, amber when scope-incomplete.
+- **UpgradeModal** mounts inside `Dashboard.svelte` and opens when the user clicks "Choose…" next to "Upgrade all" on the Updates card.
+
+### Phase 15 + 17 additions (v0.3.0)
+
+Net new components since the last inventory refresh (2026-05-23):
+
+| Component | File | Props | State owned | Notes |
+|---|---|---|---|---|
+| `UpdateIndicator` | `UpdateIndicator.svelte` | (none — reads `updater` + `settings` stores) | — | Title-bar pill that surfaces a "newer brew-browser version is available" notice in chrome. Click opens Settings → Network → Updates. Inline × dismisses-as-skip (`updater.skip(version)`). Spinner replaces × while `updater.installing === true`. ARIA role="button" with explicit Space/Enter handlers; nested real `<button>` for the dismiss. |
+| `SettingsSectionUpdates` | `SettingsSectionUpdates.svelte` | (none — reads `updater` + `settings`) | local: `info` derived from `updater.available`, `releaseNotesUrl` derived from version | Mounted at the bottom of `SettingsSectionNetwork`. Three always-visible rows: Check-for-updates-now button, Auto-check-daily toggle (bound to `settings.updateAutoCheck`), Update channel (read-only "Stable" for now). One conditional card when an update is available: v-tag heading + release notes link (canonical GH tag URL derived from version) + Install/Relaunch/Try-again button (per `updater.installComplete` / `installing` / `error` state). |
+| `GithubMarkIcon` | `GithubMarkIcon.svelte` | `size?: number`, `class?: string` | — | Real Octocat SVG, path lifted from Primer/Octicons (MIT). Used because Lucide strips brand icons (trademark policy). API matches Lucide-icon shape so it slots into icon-anywhere call sites. Rendered as the Octocat chip in TitlebarControls. |
+| `UpgradeModal` | `UpgradeModal.svelte` | `open: boolean`, `onClose: () => void` | `selected: Map<string, boolean>`, `upgrading: boolean` | Curated multi-select Upgrade flow. Lists every outdated package with checkbox + name + current→target + pinned badge (pinned packages start unchecked + disabled — brew refuses to upgrade them anyway). Top toolbar: live "N of M selected" + Select all / Deselect all. On submit: single batched `brew_upgrade_many(names)` IPC streams into the Activity drawer. Errors flow through `reportableToastError`. Triggered from the Dashboard Updates card's "Choose…" button. |
 

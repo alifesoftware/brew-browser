@@ -1,9 +1,8 @@
 # Backend API Specification
 
 **Owner:** Backend Architect
-**Wave:** 1 (specification only — no Rust written)
-**Status:** Implementation target for Wave 2
-**Last updated:** 2026-05-23
+**Status:** Live spec. Wave 1 wrote it; Waves 2–17 implemented + extended.
+**Last updated:** 2026-05-25 (v0.3.0 shipped — adds Phase 15 in-app updater commands + §13.11 today's brew_upgrade_many + brew_list force-refresh signature)
 
 This document is the complete contract for the Rust backend of `brew-browser`. Every Tauri command, every typed payload, every error variant, every IPC pattern lives here. Wave 2 implementation is a mechanical translation of this spec into Rust; Wave 3 validation runs against it.
 
@@ -1206,5 +1205,35 @@ The session added five typed error variants to `BrewError` (in `src-tauri/src/er
 - `GithubRateLimited { reset_at: i64 }` — emitted when GitHub returns `403` + `X-RateLimit-Remaining: 0`. `reset_at` is the unix timestamp. **No retry, no backoff** — callers honour the server's reset window.
 - `KeychainUnavailable { message: String }` — emitted when the macOS Keychain returns an error. No disk fallback. Frontend surfaces "Keychain unavailable — sign in unavailable until repaired".
 - `AuthRequired` — emitted by Phase 12f action commands when no token is in the Keychain. No network attempt is made.
-- `ScopeRequired { scope: String }` — emitted when the cached scopes from sign-in don't include the requested scope (currently always `public_repo` for 12f actions).
+- `ScopeRequired { scope: String }` — emitted when the cached scopes from sign-in don't include the requested scope. As of v0.3.0 the scope can be `public_repo` (star/file-issue) or `notifications` (watch/unwatch); the per-action `authed_gate(scope)` parameterizes this.
+
+### 13.11 Phase 15 — In-app updater (v0.3.0)
+
+Four commands wrapping `tauri-plugin-updater`. All check `state.require_network("update_check")` first so Offline Mode kills the path even when the plugin would otherwise reach the manifest endpoint.
+
+| Command | Signature | Purpose | Paranoid gate | Source |
+|---|---|---|---|---|
+| `update_check_now` | `async fn update_check_now(app, state) -> Result<UpdateCheckOutcome, BrewError>` | Fetch the manifest at `brew-browser.zerologic.com/updater.json`, compare against the running `CARGO_PKG_VERSION`, consult the user's skip-list. Returns `{kind: "upToDate"}` or `{kind: "available", version, currentVersion, notes, pubDate, skipped}` (flat — NOT nested under `.info`; that wire-shape bug was caught in the Phase 15 fix-up). Offline Mode surfaces as `ParanoidModeBlocked`, not a `blocked` variant. | **yes** ("update_check") | `commands/updater.rs:419` |
+| `update_install` | `async fn update_install(version: String, app, state) -> Result<(), BrewError>` | Validates the caller-supplied `version` against the in-memory cached `Available` payload (stale-UI guard), runs the explicit downgrade-rejection check, then delegates to the plugin's `download_and_install`. Plugin performs sha256 + minisign verification against the embedded `UPDATER_PUBKEY`. On success, clears `cached_available` + flips `last_outcome` back to `UpToDate` so the install button doesn't re-fire. | **yes** ("update_check") | `commands/updater.rs:445` |
+| `update_skip` | `async fn update_skip(version: String, state) -> Result<(), BrewError>` | Pushes onto the FIFO-capped (10) `skipped_update_versions` field in `settings.json`. **Refuses on Corrupt settings** (would otherwise silently revoke paranoid-on lockdown by writing `Settings::default()`). FirstLaunch materializes defaults with the skip recorded. **No** require_network gate — purely local state. | no | `commands/updater.rs:556` |
+| `update_relaunch` | `async fn update_relaunch(app) -> Result<(), BrewError>` | Spawns a 50ms-delayed `tauri::AppHandle::restart()` so the IPC response makes it back to the renderer before the process dies. The plugin's macOS install path replaces the .app bundle but doesn't auto-restart — this bridges that. | no | `commands/updater.rs:584` |
+
+Wire-shape pin: `UpdateCheckOutcome` is `#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]` on an enum with `UpToDate` (unit variant) and `Available { version, current_version, notes, pub_date, skipped }`. Frontend matches by flat fields, not by nested `.info`.
+
+### 13.12 Phase 17 — `brew_upgrade_many` + `brew_list(force)` (v0.3.0)
+
+| Command | Signature | Purpose | Notes |
+|---|---|---|---|
+| `brew_upgrade_many` | `async fn brew_upgrade_many(names: Vec<String>, on_event, state) -> Result<JobResult, BrewError>` | Runs a single `brew upgrade <n1> <n2> ...` invocation for a curated subset of packages (selected via Dashboard's "Choose…" modal). Validates every name through `validate_package_name`. Empty list → `InvalidArgument` (caller should use `brew_upgrade(None)` for upgrade-all). Takes `brew_write_lock`, invalidates `installed_cache` on success. | `commands/actions.rs:123` |
+| `brew_list` (signature change) | `async fn brew_list(state, force: Option<bool>) -> Result<PackageList, BrewError>` | Now takes `force: Option<bool>`. When `Some(true)`, bypasses `state.installed_cache` before fetching. Wired to the Dashboard Refresh button + post-action reloads so `brew upgrade` runs in the user's terminal aren't masked by a stale cache forever. | `commands/list.rs:13` |
+
+### 13.13 Phase 15 — New error variants
+
+In addition to the Phase 12f set in §13.10, three more typed variants were added to `BrewError` in `src-tauri/src/error.rs` for the updater path:
+
+- `HashMismatch { expected: String, actual: String }` — sha256 disagreement between the downloaded artifact and the manifest's `sha256` field. Currently only constructed by the mock backend in tests; the production plugin runs minisign-only as of `tauri-plugin-updater 2.10.1`. Wired so a v0.3.1+ manifest sha256 pre-check has the typed error ready.
+- `SignatureVerificationFailed { message: String }` — minisign verification of the downloaded artifact failed against the embedded public key. Fail-closed: the `.app.tar.gz` is deleted before this error returns.
+- `DowngradeRejected { current: String, target: String }` — explicit downgrade-attack defense in `run_install`. Defense in depth on top of the plugin's own version comparator.
+
+All three are mirrored in the frontend `BrewErrorPayload` union with friendly messages via `brewErrorMessage` (`src/lib/types.ts`).
 
