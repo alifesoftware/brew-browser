@@ -618,3 +618,35 @@ Two coupled tracks landed in this session, both targeting v0.3.0:
 - Startup placeholder-pubkey guard (5-line panic-on-PLACEHOLDER in release builds) — would have caught the v0.3.0 cycle of "key generated but pubkey still placeholder."
 - Persist `last_checked_at` to disk so the auto-updater honours the 24h floor across launches (currently in-memory only, effectively never auto-fires for typical morning/evening usage patterns).
 - Manifest URL allowlist enforcement — documented in `security.md` §15 but not implementable through `tauri-plugin-updater 2.10.1` (no pre-fetch hook).
+
+## 2026-05-25 (v0.3.1 SHIPPED — same day as v0.3.0)
+
+Cumulative point release rolling up 13 commits since `d7c2bca` (v0.3.0). Theme: polish + magic.
+
+### Done
+
+- ✅ **Report-to-brew-browser flow** (commit `eff67e7`) — every error toast now carries a "Report" action that opens a pre-filled GH new-issue URL with full context (app + brew version, command, exit code, stderr excerpt, friendly message). Same button surfaces in the Activity drawer's failed-job footer. New `src/lib/util/reportIssue.ts` centralizes the URL builder + the `reportableToastError(title, e)` helper that replaced 10 sites with the `toast.error(title, e.code)` anti-pattern (which threw away the friendly message and gave the user no recourse beyond the raw discriminator).
+- ✅ **`brew_list(force)` cache-bypass fix** (`6aaf3c1`) — Refresh button can now actually refresh the installed list. Previously `state.installed_cache` was warm-on-first-launch and never invalidated except by in-app actions; `brew upgrade` runs from the user's terminal could mask the list indefinitely.
+- ✅ **Curated Upgrade modal** (`b11c7ac`) — "Choose…" button on Dashboard Updates card opens a checkbox list of every outdated package, pinned-badged + auto-checked, with batched `brew_upgrade_many(names)` IPC streaming into Activity.
+- ✅ **Refresh now does `brew update` too** (`2983a02`) — full three-step sync: brew update → catalog refresh → installed reload. Streaming brew-update output to Activity so the user sees what brew is doing. Closes the loop on "why are my outdated flags stale?"
+- ✅ **Activity persistence hardening** (`f4ddd2e`) — `startJob` persists immediately (not via the 400ms debounce); cap raised from 50 to 200; persist + hydrate now log to console on failure instead of silently swallowing.
+- ✅ **Root → docs/ reorganization** (`83bc371` + `1971bbe`) — `BUILD.md` / `PHILOSOPHY.md` / `PLAN.md` moved to `docs/`. Root now holds only GitHub conventions (README, SECURITY, CONTRIBUTING) + AI workflow files (AGENTS.md + CLAUDE.md symlink). New `Project root vs memory-bank` section codified in `toc.md`.
+- ✅ **Memory-bank refresh** (`95e9e6a` + `51ae088`) — toc.md gains "Live vs historical entries" convention; six live docs refreshed against v0.3.0 reality (backendApi, frontendComponents, ideas, projectbrief, techContext, realityCheck).
+- ✅ **Bundle id rename** (`1b1287d`) — `dev.openbrew.browser` → `com.zerologic.brew-browser`. KEYCHAIN_SERVICE coordinated. `service_id_matches_tauri_conf` test pinned to new value. v0.3.0 users will re-sign-in to GitHub once via the existing Re-authorize toast button.
+- ✅ **Donut hover-with-counts + AI subtitle fallback** (`2805e8c`) — hover any slice (or matching legend row) → fatten + dim siblings + center-text takeover ("325 / installed" → "{count} / {label}"). `prefers-reduced-motion` respected. Discover browse rows fall back to catalog `desc` when AI doesn't have a friendly name.
+- ✅ **Unified Description + Version columns across list views** (`e7b7093`) — Library, Discover, Trending all share the canonical row layout: `(icon/rank) | NAME | DESCRIPTION | VERSION | TYPE | TRAIL`. Description column prefers AI summary > upstream desc. Version reads from catalog for uninstalled, installed-version for Library. `CatalogEntrySummary.version` field added to backend. Responsive breakpoints drop Trail → Description → Version in priority order.
+- ✅ **Magic `local_search`** (`2f79559`) — new in-process IPC scans catalog + enrichment + categories in unified union-search. Weighted scoring: name (1000/700/500) > friendlyName (350) > category label (280) > summary (180) > desc (120) > tag (100). Multi-term AND semantics. Sub-20ms even on 3-term queries. Replaces `brew_search` as the search store's default. "video player" finds VLC. "AI" finds ollama + llm. "Video & Audio" returns the whole category.
+
+### Tests & lint at release time
+
+- `cargo test`: **473 passed**, 0 failed, 6 ignored
+- `cargo clippy --all-targets -- -D warnings`: clean
+- `npm run check`: 0 errors, 3 pre-existing warnings (unchanged)
+- `npm run build`: clean
+- `bash -n` on both release scripts: clean
+
+### Notes
+
+- The bundle id rename is the only user-visible cost: v0.3.0 users have to re-sign-in to GitHub once. Worth doing now at 18 stars rather than later at 1800.
+- `local_search` is the marquee feature. The scoring rubric was tuned by hand against a few representative queries (`vlc`, `password manager`, `AI`, `Video & Audio`). Future polish: surface category-label exact-match as a pinned "Browse → X" suggestion above brew's hits.
+- One stable v0.3.x follow-up: persist `last_checked_at` to disk so the auto-updater 24h floor honours typical morning/evening usage. Currently in-memory only.
