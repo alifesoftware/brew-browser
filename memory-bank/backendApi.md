@@ -1237,3 +1237,63 @@ In addition to the Phase 12f set in §13.10, three more typed variants were adde
 
 All three are mirrored in the frontend `BrewErrorPayload` union with friendly messages via `brewErrorMessage` (`src/lib/types.ts`).
 
+### 13.14 v0.4.0 — Velocity scoring + opt-in trending history
+
+**Settings:** new `enhanced_trending_enabled: bool` field on the `Settings` struct (`src-tauri/src/commands/settings.rs`). `#[serde(default)]`, defaults `false` in `Settings::default()`. Forward-compat tested: a v0.3.x `settings.json` missing this field reads cleanly as `false`.
+
+**New gate:** `AppState::require_enhanced_trending()` (`src-tauri/src/state.rs:269`) composes the master `require_network` gate with the per-feature toggle. Returns:
+
+- `Err(ParanoidModeBlocked { feature: "trending_history" })` when paranoid is on (master switch wins; routes to Offline Mode toggle in UI)
+- `Err(FeatureDisabled { feature: "trending_history" })` when paranoid is off but the per-feature toggle is off
+- `Err(FeatureDisabled)` on `FirstLaunch` (defaults make the toggle false — fresh-install opt-in posture preserved)
+- `Ok(())` only when both gates open
+
+**New error variant:** `BrewError::FeatureDisabled { feature: String }` (`src-tauri/src/error.rs:80`). Serializes as `{"code": "feature_disabled", "feature": "..."}`. Distinct from `ParanoidModeBlocked` so the frontend toast routes to the per-feature toggle, not the master switch.
+
+**Extended IPC return shape:** `TrendingEntry` (`src-tauri/src/types.rs:340`) gains three optional fields:
+
+```rust
+pub struct TrendingEntry {
+    // ... existing fields ...
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_on_request_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_on_request_count_formatted: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub velocity_index: Option<f64>,
+    // ...
+}
+```
+
+All three are `skip_serializing_if = "Option::is_none"` so the wire shape stays backward-compatible with v0.3.x clients reading the older shape.
+
+**`trending_fetch` orchestration change:** the existing IPC now eager-warms all three windows (30d, 90d, 365d) via `tokio::task::JoinSet` on the first call so velocity can be back-filled from the cross-window join. Each window fetch is itself a `tokio::join!` over `install` + `install-on-request` endpoints — so a cold cache triggers 6 concurrent HTTP requests bounded by the slowest. Subsequent calls within TTL hit the cache for all three and skip the network.
+
+**Velocity math:** server-side in `trending::velocity::velocity_index(c30, c90, c365) -> Option<f64>` (`src-tauri/src/trending/velocity.rs`). Returns `None` on degenerate inputs (zero `c365`, non-monotonic windows, annual monthly average < 1.0). The JS collector mirrors this byte-for-byte in `tools/trending-collector/lib/common.js` so client-computed and server-precomputed values agree.
+
+**New IPCs for the opt-in history endpoint:**
+
+| Command | Signature | Purpose | `require_enhanced_trending` | File |
+|---|---|---|---|---|
+| `trending_history_index` | `async fn trending_history_index(state) -> Result<TrendingHistoryIndex, BrewError>` | Fetch the summary blob (top-500 packages by velocity + ~30-point compact sparkline per row) from `brew-browser.zerologic.com/trending-history/index.json`. Cached 6h per-process via `TrendingHistoryCache`. Single call on Trending tab mount; powers per-row inline sparklines without per-row HTTP. | **yes** | `commands/trending.rs:244` |
+| `trending_history_fetch` | `async fn trending_history_fetch(name: String, kind: PackageKind, state) -> Result<TrendingHistorySeries, BrewError>` | Fetch the per-package full series from `brew-browser.zerologic.com/trending-history/{kind}/{name}.json`. URL builder validates `name` against strict `[A-Za-z0-9._+@-]+` allowlist (rejects path traversal, shell-metas, spaces). LRU-evicted at 500 packages. | **yes** | `commands/trending.rs:283` |
+
+**New history wire types** (`src-tauri/src/types.rs:367-440`):
+
+- `TrendingHistorySource` — enum `{ Seed, Daily }`. `seed` is one of the three derived bootstrap buckets; `daily` is a real nightly snapshot. UI fades or labels the historical-only portion distinctly.
+- `TrendingHistoryPoint` — `{ date, count_30d?, count_90d?, count_365d?, count_install_on_request_30d?, estimated_daily_installs?, source }`. The `estimated_daily_installs` is server-computed via adjacent-day `count_30d` subtraction (only when both points are `daily` source).
+- `TrendingHistorySeries` — `{ name, kind, points, generated_at, cache_age_seconds }`. The full per-package response shape.
+- `TrendingHistoryIndex` — `{ generated_at, packages: Vec<TrendingHistoryIndexEntry>, cache_age_seconds }`.
+- `TrendingHistoryIndexEntry` — `{ name, kind, velocity_index?, sparkline: Vec<u64> }`. Compact per-package summary for the index.
+
+**Per-package cache:** `TrendingHistoryCache` (`src-tauri/src/trending/history/cache.rs`) — single-slot `index` + `HashMap<HistoryKey, CachedSeries>` for per-package series. TTL 6h matching the nightly collector cadence. Cap 500 entries with oldest-by-`fetched_at` eviction.
+
+**Tests:** +33 backend tests across all three steps (473 → 506). Critical invariants pinned:
+
+- Toggle off → `FeatureDisabled` (not `ParanoidModeBlocked`) — frontend routes correctly
+- Paranoid on, toggle on → `ParanoidModeBlocked` — master switch wins
+- FirstLaunch → `FeatureDisabled` — no zerologic.com traffic until explicit opt-in
+- Corrupt settings → `ParanoidModeBlocked` (fail-closed via inner gate)
+- URL builder rejects `../`, `/`, ` `, `;` — exhaustively tested
+- Velocity returns `None` for degenerate / too-small / non-monotonic inputs
+

@@ -232,3 +232,29 @@
 **Rationale:** github module is a single coherent unit. Splitting it forces shared-file coordination. One agent owns it cleanly.
 
 **Constraint observed:** the combined agent ships placeholder `GITHUB_OAUTH_CLIENT_ID` const. Real client_id must be added before any release (documented in BUILD.md, 7-step OAuth App creation guide). 12c functionality works without a client_id — anonymous tier is independent. Only 12e sign-in needs the real client_id.
+
+---
+
+## 2026-05-26: Opt-in trust boundary for enhanced trending history (v0.4.0)
+
+**Context:** v0.4.0 introduces velocity scoring on the Trending tab. The velocity index itself is computable from the always-on `formulae.brew.sh/api/analytics/install` + `install-on-request` endpoints — three windows joined server-side gives us "monthly rate vs annual average" with zero net-new trust boundary. But the user-requested follow-up (Star-History-for-Homebrew style inline sparklines + per-package charts) needs *time-series* data that Homebrew doesn't publish. We have to capture it ourselves on `brew-browser.zerologic.com`.
+
+That means a net-new outbound path to infrastructure **we** operate (path j in the projectbrief enumeration; tenth in the README disclosure). The previous nine paths target Homebrew, GitHub, or generic third parties — trust posture there is "we trust the upstream." Path j is "trust us." That's a meaningful posture shift that needs explicit consent.
+
+**Decision:** ship velocity (free, no new boundary) ALWAYS-ON in v0.4.0. Ship history sparklines + detail-panel charts as an **opt-in per-feature toggle** behind `Settings.enhanced_trending_enabled`. Default `false`. Master Offline Mode hard-locks it regardless.
+
+**Architecture:**
+
+- New `BrewError::FeatureDisabled { feature }` variant, distinct from `ParanoidModeBlocked` so the frontend toast routes to the per-feature toggle (not the master switch).
+- New `AppState::require_enhanced_trending()` helper composes the master `require_network` gate with the per-feature toggle. Five rejection paths pinned by tests: toggle off, paranoid on, paranoid-wins-over-toggle, FirstLaunch (opt-in posture preserved), Corrupt (paranoid gate fires first).
+- The Caddy block serving the endpoint sets `request>remote_ip "0.0.0.0"` at the log layer so the privacy claim ("no IP retention") is auditable — anyone can ssh in and `cat Caddyfile`. Documented in `security.md` §16.
+- Frontend `trendingHistory` store consults `settings.effective.enhancedTrendingEnabled && !paranoidMode` before calling the IPC. Soft-fails silently if the gate denies — feature is enrichment, not load-bearing.
+
+**Alternatives rejected:**
+
+- **Always-on for B too.** Simpler, but breaks the "no telemetry, no surprise calls" posture stated in the projectbrief. The endpoint is our infra, not upstream's. Even though it logs no IP, the existence of a non-Homebrew outbound call deserves explicit consent.
+- **Subdomain (`trending-history.zerologic.com`).** Cleaner conceptual split. But adds Caddy cert mgmt + DNS coordination + a second name to disclose. The subpath shares the existing `brew-browser.zerologic.com` cert and is documented as the same trust boundary (project-operated infrastructure).
+- **Defer the trust ask until v0.5+.** Would mean shipping velocity without sparklines — half the visual story. The seed-from-rolling-windows trick (derive 3 historical buckets from c30, c90-c30, c365-c90) makes day-0 sparklines viable, so the feature is worth shipping together.
+- **No per-feature gate; just rely on Offline Mode.** Master switch is too blunt — turning it off blocks the entire app. A per-feature toggle lets users keep brew search + GitHub auth working while declining the new endpoint specifically.
+
+**Outcome:** documented in `security.md` §16 (server-side audit), `projectbrief.md` "ten paths" (architectural enumeration), `README.md` "Open-source posture" (user-facing), and a new disclosure-list entry in `SettingsSectionNetwork.svelte` (in-app). Endpoint deployed via `tools/trending-collector/` running nightly cron on `brew-browser.zerologic.com`. Per-feature toggle lives in a new `SettingsSectionTrendingHistory.svelte` mounted at the bottom of Network alongside the existing Updates subsection.

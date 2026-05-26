@@ -653,3 +653,118 @@ Once §15.3.K is fixed (Corrupt-branch refuses the skip), §15.3.I is fixed (wir
 ---
 
 *End of Phase 15 audit. No production code modified by this audit. Prior `security.md` content lives in git history.*
+
+---
+
+## 16. v0.4.0 — Enhanced Trending History endpoint audit
+
+**Date:** 2026-05-26
+**Scope:** the new opt-in `brew-browser.zerologic.com/trending-history/*` endpoint (path j in the projectbrief outbound enumeration). Confirms the trust-boundary statement in README is auditable, not just a promise.
+
+### 16.1 Why this gets its own section
+
+Every other outbound path in the projectbrief enumeration targets a third party (`formulae.brew.sh`, `api.github.com`, `github.com/login/...`) or relies on data we don't operate (cask homepages). Path **(j)** is the first one served by infrastructure we control. That shifts the trust posture from "we trust upstream's privacy practices" to "we have to prove our own." This section is the audit that closes the loop.
+
+### 16.2 Server-side data practice
+
+The endpoint serves static JSON from Caddy on `brew-browser.zerologic.com`. The deploy lives at `/home/michael/sites/brew-trending/` with the collector (`tools/trending-collector/`) regenerating the JSON tree nightly via cron.
+
+**Caddyfile block** for the `/trending-history/*` subpath on the existing `brew-browser.zerologic.com` vhost:
+
+```caddy
+brew-browser.zerologic.com {
+    # ... existing updater manifest block ...
+
+    handle_path /trending-history/* {
+        root * /home/michael/sites/brew-trending
+        file_server browse
+
+        # Privacy: redact client IP at the access-log layer. Without
+        # this, Caddy's default JSON log would store remote_ip on
+        # every GET — the trust statement in README would be a lie.
+        log {
+            output file /var/log/caddy/brew-trending.log {
+                roll_size 10MiB
+                roll_keep 5
+            }
+            format json {
+                fields {
+                    request>remote_ip "0.0.0.0"
+                    request>remote_port "0"
+                }
+            }
+        }
+
+        # GET only. No PUT/POST/DELETE — the endpoint is read-only by
+        # design, but be explicit so a future Caddy default change
+        # can't surprise us.
+        @writes method PUT POST DELETE PATCH
+        respond @writes 405
+
+        # No cookies set, no auth needed. Explicit cache-control so
+        # CDN intermediaries / browsers don't re-fetch on every page
+        # load when the user is browsing many package details.
+        header {
+            Cache-Control "public, max-age=21600"
+            X-Content-Type-Options "nosniff"
+            -Set-Cookie
+            -Server
+        }
+
+        # CORS not needed — the app makes calls from the Tauri shell,
+        # which is same-origin to the embedded webview. No browser
+        # context will ever hit this.
+    }
+}
+```
+
+**What this guarantees** (and what the user can verify):
+
+1. **No IP retention.** Caddy's `log.format.fields.request>remote_ip` overrides force every log line to record `0.0.0.0` as the source. The original IP is never written to disk. Same for `remote_port`.
+2. **No cookies.** No `set-cookie` directive in the block and any incidental cookie a future plugin might add is stripped via `-Set-Cookie`.
+3. **GET only.** A `respond @writes 405` catches any write attempt.
+4. **No fingerprinting.** No JavaScript runs on the endpoint (it's static JSON). No referer logging, no ETag tracking, no per-request unique tokens.
+5. **Cache-Control allows downstream caching.** A 6-hour `max-age` matches the app-side LRU TTL and dramatically reduces real requests-per-user.
+
+### 16.3 What the app sends
+
+Two URLs, both `GET`:
+
+- `https://brew-browser.zerologic.com/trending-history/index.json` — fetched once on Trending tab mount (when the toggle is on). No package-specific information in the URL or headers.
+- `https://brew-browser.zerologic.com/trending-history/{kind}/{name}.json` — fetched on demand from PackageDetail. Includes the package name in the URL path (necessary — that's how you fetch a specific file).
+
+The Rust client at `src-tauri/src/trending/history/client.rs:64-77` validates `name` against a strict `[A-Za-z0-9._+@-]+` allowlist before constructing the URL. Path traversal (`../etc/passwd`), shell-metas (`; & |`), and spaces are all refused with `InvalidArgument` before the round-trip.
+
+The user-agent string is the same as the always-on trending fetch: `brew-browser/<version> (+https://github.com/msitarzewski/brew-browser)`. No anonymous fingerprint surface.
+
+### 16.4 What the app *doesn't* send
+
+- **No package list.** The app fetches one package's series at a time, not "everything you have installed." A logging server-side could in principle correlate package-name fetches by IP — but per §16.2 the IP is `0.0.0.0` in the logs by configuration. The correlation is not possible.
+- **No timestamps beyond the HTTP-default `Date` header.**
+- **No telemetry.** No `app_version` / `os_version` / `install_id` query parameters or headers.
+
+### 16.5 Threat model
+
+| Threat | Mitigation |
+|---|---|
+| MITM injects malicious JSON | TLS (Caddy's automatic Let's Encrypt) + the app's per-feature error surface degrades silently on parse failure; a crafted payload can at worst show wrong trends, not execute code (no JS context, no eval). |
+| Compromised endpoint serves harmful redirects | App uses `reqwest` with the default redirect policy (max 10 hops). No SSRF-relevant surface — endpoint is fetched, not used to construct further requests. |
+| Caddy log misconfiguration leaks IPs | The IP-redaction config is the only thing that makes the README claim true. **Add a periodic check** (manual or via cron) that `grep -E '"remote_ip":"[^0]' /var/log/caddy/brew-trending.log` returns nothing. If it ever does, the claim is broken. |
+| User opts in then forgets the toggle exists | Disclosure list at the bottom of Settings → Network shows the `brew-browser.zerologic.com/trending-history` entry with current allowed/blocked state. Visible audit. |
+| Per-feature toggle bypassed by a bug in `require_enhanced_trending` | Pinned tests at `src-tauri/src/state.rs:require_enhanced_trending_blocks_*` cover all five rejection paths (toggle off, paranoid on, FirstLaunch, Corrupt, paranoid-wins-over-toggle). |
+| Future contributor adds an unrelated outbound call to the same host | `require_network` denies in Offline Mode regardless. New features that add a path to this host must add a disclosure entry per the cross-cutting `pathStatuses` review in `SettingsSectionNetwork.svelte`. |
+
+### 16.6 Posture
+
+The endpoint adds **one** new trust boundary (path j in the enumeration). The boundary is documented in three places: the README disclosure (user-facing), the projectbrief enumeration (architectural), and this section (technical). The Caddy config above is the auditable artifact — anyone can ssh to `brew-browser.zerologic.com`, read `Caddyfile`, and verify the privacy claim is real.
+
+**Verdict:** the opt-in posture, the per-feature gate, the IP-redacted server logs, and the existing Offline Mode kill switch together preserve the READY-FOR-SCRUTINY posture from §15. The new path is a feature gate, not a posture change.
+
+**Pre-launch checklist** (Step 9 of the v0.4.0 plan):
+
+- [ ] Caddy block deployed and `caddy reload`'d on `brew-browser.zerologic.com`
+- [ ] `curl -I https://brew-browser.zerologic.com/trending-history/index.json` returns `Cache-Control: public, max-age=21600` and **no `Set-Cookie`**
+- [ ] `curl -X POST` returns `405 Method Not Allowed`
+- [ ] Tail of `/var/log/caddy/brew-trending.log` shows `"remote_ip":"0.0.0.0"` for the test request above
+- [ ] `tools/trending-collector/seed.js` run once and `index.json` lands at the URL with non-empty `packages`
+- [ ] Frontend with `enhancedTrendingEnabled = true` renders inline sparklines on the Trending tab

@@ -687,3 +687,43 @@ From this branch onward, merges to `main` go through pull requests — push bran
 - **Step 7** umbp `tools/trending-collector/` (Bun TS daemon + seed.ts + cron + SQLite + static JSON output)
 - **Step 8** Memory bank + docs polish (decisions.md ADR, projectbrief.md nine→ten paths, security.md endpoint audit, backendApi.md / frontendComponents.md / techContext.md, `docs/release-notes/0.4.0.md`, README disclosure)
 - **Step 9** Caddy privacy hardening (IP-strip, no cookies, GET-only, cache-control; document snippet in security.md so it's auditable)
+
+## 2026-05-26 (later — v0.4.0 Steps 4–8 done on branch)
+
+Same day, second commit + third commit on top of the backend. Full detail in `tasks/2026-05/19-v0.4.0-backend.md` (record now spans Steps 1–8). **Only Step 9 — Caddy deploy + verification — remains** before this branch PRs into main and v0.4.0 ships.
+
+### Done (Steps 4–6 — commit `6711133`)
+
+- ✅ **Step 4** — Settings → Network UI: new `SettingsSectionTrendingHistory.svelte` opt-in subsection mounted alongside the Updates subsection at the bottom of Network. New 6th `pathStatuses` entry in `SettingsSectionNetwork.svelte`. `Settings.enhancedTrendingEnabled` + `feature_disabled` variant in `BrewErrorPayload` union in `types.ts`. `api.ts` IPC bindings (`trendingHistoryIndex`, `trendingHistoryFetch`).
+- ✅ **Step 5** — Trending tab restructure: default sort velocity desc (was rank asc), new Velocity column with Flame/Snowflake/dash badges + numeric value, count cell becomes vertical-flex with inline `TrendingSparkline` beneath when enhanced trending is on. 8-col responsive grid, breakpoint-priority drops. New shared `TrendingSparkline.svelte` with `inline` + `detail` variants. New `trendingHistory.svelte.ts` store with sync lookup helpers.
+- ✅ **Step 6** — PackageDetail integration: `loadDetail` fires `trendingHistory.ensureSeriesLoaded(name, kind)`; new `trend-card` section between description and AI blocks renders the `detail`-variant sparkline. Strictly passive per D4 — no placeholder when toggle is off, the section simply doesn't exist.
+
+`npm run check`: 0 errors, 3 pre-existing warnings (v0.3.1 baseline).
+
+### Done (Step 7 — commit `6901b64`)
+
+- ✅ **trending-collector** for `brew-browser.zerologic.com`. Plain Node 20+ ESM, single dependency `better-sqlite3`. `tools/trending-collector/` directory with:
+  - `lib/common.js` (SQLite schema, HTTP helpers, velocity math mirroring Rust, atomic JSON writes)
+  - `lib/render.js` (regenerates `index.json` top-500 + per-package files with adjacent-day-subtraction-derived daily install estimates)
+  - `seed.js` (one-shot bootstrap deriving 3 historical buckets per package from rolling-window subtraction + writes today's c30/c90/c365 as daily so next nightly run has a predecessor)
+  - `collect.js` (nightly cron entrypoint, 12 concurrent HTTP GETs, INSERT OR IGNORE for idempotent same-day re-runs)
+  - `README.md` (full deploy walkthrough)
+
+`node --check` on every JS file: clean.
+
+### Done (Step 8 — this commit)
+
+- ✅ Memory bank + docs polish:
+  - `projectbrief.md` nine → ten outbound paths; new item (j) for the opt-in endpoint
+  - `decisions.md` new ADR `2026-05-26: Opt-in trust boundary for enhanced trending history (v0.4.0)`
+  - `security.md` §16 full endpoint audit including the actual Caddyfile snippet + threat-model table + pre-launch checklist (the snippet IS the auditable artifact for the privacy claim)
+  - `techContext.md` Trending data sources section rewritten
+  - `backendApi.md` §13.14 v0.4.0 backend surface documented
+  - `frontendComponents.md` v0.4.0 additions block
+  - `docs/release-notes/0.4.0.md` (NEW) user-facing release notes
+  - `README.md` outbound disclosure updated
+- ✅ Task record `tasks/2026-05/19-v0.4.0-backend.md` expanded to cover Steps 1–8 (renamed in scope from "backend" to "ship").
+
+### What's left
+
+**Step 9 — Caddy deploy** on `brew-browser.zerologic.com`. Verbatim config in `security.md` §16.2; verification curl checklist in §16.6. Then bootstrap run (`node seed.js` on the box) → PR into main → v0.4.0 release.
