@@ -1,6 +1,8 @@
 # Security Audit — Wave 3 Verification
 
 > **Note (2026-05-24, v0.3.0):** "Paranoid Mode" is the internal name (and the `paranoid_mode` field name in `settings.json`) for what v0.3.0+ surfaces as "Offline Mode" in the UI. Both terms refer to the same kill switch. References to "Paranoid Mode" throughout §1–§14 are accurate as of the date each section was written; the UI rename is documented in §15.
+>
+> **Note (2026-05-25, v0.3.1):** The Keychain service ID was renamed from `"dev.openbrew.browser"` → `"com.zerologic.brew-browser"` (matching the Tauri bundle identifier rename). References to `"dev.openbrew.browser"` throughout §13.5 + §13.6 + Phase 12 task records describe the as-shipped state at the time each section was written. The match between `KEYCHAIN_SERVICE` (in `src/github/auth.rs`) and the bundle identifier (in `tauri.conf.json`) is still enforced by `tests::service_id_matches_tauri_conf`; only the literal string changed.
 
 **Auditor:** Security Engineer (Wave 3 re-audit)
 **Date:** 2026-05-23

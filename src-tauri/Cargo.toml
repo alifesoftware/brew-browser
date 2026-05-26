@@ -56,7 +56,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # OS-native secret storage. Phase 12e (GitHub Device Flow) stores the
 # OAuth access token in the macOS Keychain under
-# `dev.openbrew.browser` / `github_access_token`. The crate fans out to
+# `com.zerologic.brew-browser` / `github_access_token`. The crate fans out to
 # Keychain on macOS, Credential Manager on Windows, Secret Service on
 # Linux — we only use the macOS path.
 keyring = { version = "3", features = ["apple-native"] }

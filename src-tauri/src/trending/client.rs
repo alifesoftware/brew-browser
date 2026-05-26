@@ -54,7 +54,7 @@ pub async fn fetch(
         .user_agent(concat!(
             "brew-browser/",
             env!("CARGO_PKG_VERSION"),
-            " (+https://github.com/openbrew/brew-browser)"
+            " (+https://github.com/msitarzewski/brew-browser)"
         ))
         .build()
         .map_err(|e| BrewError::Network {

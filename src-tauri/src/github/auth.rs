@@ -52,8 +52,17 @@ use crate::error::BrewError;
 /// bundle the app actually ships under — otherwise the user could sign
 /// in and the next launch wouldn't find the token.
 ///
+/// Renamed from `"dev.openbrew.browser"` → `"com.zerologic.brew-browser"`
+/// in v0.3.1. The old identifier was the Tauri scaffolder default that
+/// stuck around for too long. Users with v0.2.1+ tokens stored under
+/// the old service ID will see them orphaned (macOS Keychain ACLs are
+/// keyed by binary signature + service ID — different service = no
+/// migration possible without re-prompting anyway). On their next
+/// GitHub action the Re-authorize toast flow guides them through a
+/// one-click re-sign-in.
+///
 /// The match is enforced by `tests::service_id_matches_tauri_conf`.
-pub const KEYCHAIN_SERVICE: &str = "dev.openbrew.browser";
+pub const KEYCHAIN_SERVICE: &str = "com.zerologic.brew-browser";
 
 /// Keychain account name for the access token. Keep this stable across
 /// versions — a rename would orphan tokens already in users' Keychains.
@@ -74,14 +83,13 @@ pub const KEYCHAIN_ACCOUNT_USERNAME: &str = "github_username";
 /// **Hardcoded by design.** RFC 8628 §3.1: "The client identifier is
 /// not secret … client authentication is not required for the device
 /// authorization grant type." Forks should replace this with their own
-/// GitHub App's client_id (see `BUILD.md` §"GitHub OAuth App").
+/// GitHub App's client_id (see `docs/BUILD.md` §"GitHub OAuth App").
 ///
-/// **TODO before release:** create the OAuth App on github.com under
-/// the `openbrew` org (or whoever ships v0.2) and replace this
-/// placeholder. The placeholder will produce a clear "client_id not
-/// found" error on the first sign-in attempt; failing loudly is
-/// preferred to falling back to a default that could leak Device-Flow
-/// requests onto someone else's GitHub App.
+/// The current value is the real `client_id` for the upstream
+/// `brew-browser` GitHub OAuth App under `msitarzewski`'s account.
+/// Maintained by the upstream maintainer; do not reuse from forks —
+/// rate-limit budget and any future revocation would tie back to
+/// upstream rather than the fork.
 pub const GITHUB_OAUTH_CLIENT_ID: &str = "Ov23liJZKbvrSBuiOPkT";
 
 /// OAuth scopes we request at sign-in. **Keep this minimum** — any
@@ -1038,7 +1046,7 @@ mod tests {
     fn keychain_constants_are_stable() {
         // Renaming these silently orphans tokens in users' Keychains.
         // Any change here needs an explicit migration plan.
-        assert_eq!(KEYCHAIN_SERVICE, "dev.openbrew.browser");
+        assert_eq!(KEYCHAIN_SERVICE, "com.zerologic.brew-browser");
         assert_eq!(KEYCHAIN_ACCOUNT_TOKEN, "github_access_token");
         assert_eq!(KEYCHAIN_ACCOUNT_SCOPES, "github_access_token_scopes");
         assert_eq!(KEYCHAIN_ACCOUNT_USERNAME, "github_username");

@@ -92,7 +92,7 @@ Watch for issues from v0.3.0 users; have a v0.3.1 hotfix flow ready.
 | Catalog refresh | `python tools/catalog/fetch.py` |
 | Enrichment refresh | `tools/categorize/.venv/bin/python3 tools/enrich/enrich.py --tier-a` |
 | Runtime caches | `~/Library/Application Support/brew-browser/` |
-| Keychain | service `dev.openbrew.browser`, accounts `github_access_token` + `_scopes` + `github_access_token_scopes` |
+| Keychain | service `com.zerologic.brew-browser` (renamed in v0.3.1; was `dev.openbrew.browser` through v0.3.0), accounts `github_access_token` + `_scopes` + `github_access_token_scopes` |
 | Icon source | `docs/icon/brew-browser.svg` (full-bleed square, Tahoe-clean) |
 | Icon regen | `npm run tauri icon docs/icon/brew-browser.svg` |
 | Release notes | `docs/release-notes/<version>.md` (convention started in v0.3.0) |
