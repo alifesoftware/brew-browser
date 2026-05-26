@@ -650,3 +650,109 @@ Cumulative point release rolling up 13 commits since `d7c2bca` (v0.3.0). Theme: 
 - The bundle id rename is the only user-visible cost: v0.3.0 users have to re-sign-in to GitHub once. Worth doing now at 18 stars rather than later at 1800.
 - `local_search` is the marquee feature. The scoring rubric was tuned by hand against a few representative queries (`vlc`, `password manager`, `AI`, `Video & Audio`). Future polish: surface category-label exact-match as a pinned "Browse → X" suggestion above brew's hits.
 - One stable v0.3.x follow-up: persist `last_checked_at` to disk so the auto-updater 24h floor honours typical morning/evening usage. Currently in-memory only.
+
+## 2026-05-26 (v0.4.0 backend on branch)
+
+Same-day continuation. Branch `feat/v0.4.0-velocity-and-history` off `main` at `d6d28a0`. Full file:line detail in `tasks/2026-05/19-v0.4.0-backend.md`.
+
+### Done (Steps 1–3 of 9 — full backend)
+
+- ✅ **Step 1** — `Settings.enhanced_trending_enabled: bool` (default `false`, forward-compat tested), `state::AppState::require_enhanced_trending()` gate composing master paranoid with per-feature toggle, new `BrewError::FeatureDisabled { feature }` variant so frontend can route toast to the right setting. +9 tests.
+- ✅ **Step 2** — `trending::client::fetch` now hits `install` + `install-on-request` in parallel via `tokio::join!` and merges on package name. New `trending::velocity::velocity_index(c30, c90, c365) → Option<f64>` pure-math helper (returns `None` on degenerate or too-small inputs). `commands::trending::trending_fetch` eager-warms all three windows via `tokio::task::JoinSet` and back-fills `velocity_index` from the cross-window join. +14 tests.
+- ✅ **Step 3** — New `trending::history::{mod, client, cache}` module. Two new IPCs: `trending_history_index()` (summary blob — top-N with velocity + compact sparkline; single fetch on tab mount) and `trending_history_fetch(name, kind)` (per-package full series; on-demand from PackageDetail). Both gated by `require_enhanced_trending`. URL builder rejects path traversal. LRU cache (cap 500, TTL 6h). 5 new types in `types.rs` for the history wire shape. +10 tests.
+
+### Decisions locked (per-decision rationale in task #19)
+
+- **D1** subpath `brew-browser.zerologic.com/trending-history/*` (not a new vhost) — reuses Caddy + cert
+- **D2** GitHub mirror of nightly JSON deferred to v0.5+
+- **D3** default sort by velocity desc + inline sparklines per row (star-history.com aesthetic); index blob carries compact sparkline arrays so the list renders from one fetch
+- **D4** sparkline empty state when toggle is off = passive (only in Settings → Network)
+- **D5** velocity computed server-side; frontend doesn't know the formula
+
+### Tests & lint at backend checkpoint
+
+- `cargo test`: **506 passed**, 0 failed, 6 ignored (473 → 506, +33 new)
+- `cargo build`: clean — zero dead-code warnings (every new symbol is wired and exercised)
+- Frontend untouched in this checkpoint
+
+### Workflow change (durable)
+
+From this branch onward, merges to `main` go through pull requests — push branch, `gh pr create`, review/CI, merge. No more direct pushes to `main`.
+
+### Still ahead
+
+- **Step 4** Settings UI (new `SettingsSectionTrendingHistory.svelte`, disclosure-list entry)
+- **Step 5** Trending tab UI (velocity column + sort-by-velocity default + inline sparklines)
+- **Step 6** PackageDetail sparkline (new `TrendingSparkline.svelte` + new `trendingHistory.svelte.ts` store)
+- **Step 7** umbp `tools/trending-collector/` (Bun TS daemon + seed.ts + cron + SQLite + static JSON output)
+- **Step 8** Memory bank + docs polish (decisions.md ADR, projectbrief.md nine→ten paths, security.md endpoint audit, backendApi.md / frontendComponents.md / techContext.md, `docs/release-notes/0.4.0.md`, README disclosure)
+- **Step 9** Caddy privacy hardening (IP-strip, no cookies, GET-only, cache-control; document snippet in security.md so it's auditable)
+
+## 2026-05-26 (later — v0.4.0 Steps 4–8 done on branch)
+
+Same day, second commit + third commit on top of the backend. Full detail in `tasks/2026-05/19-v0.4.0-backend.md` (record now spans Steps 1–8). **Only Step 9 — Caddy deploy + verification — remains** before this branch PRs into main and v0.4.0 ships.
+
+### Done (Steps 4–6 — commit `6711133`)
+
+- ✅ **Step 4** — Settings → Network UI: new `SettingsSectionTrendingHistory.svelte` opt-in subsection mounted alongside the Updates subsection at the bottom of Network. New 6th `pathStatuses` entry in `SettingsSectionNetwork.svelte`. `Settings.enhancedTrendingEnabled` + `feature_disabled` variant in `BrewErrorPayload` union in `types.ts`. `api.ts` IPC bindings (`trendingHistoryIndex`, `trendingHistoryFetch`).
+- ✅ **Step 5** — Trending tab restructure: default sort velocity desc (was rank asc), new Velocity column with Flame/Snowflake/dash badges + numeric value, count cell becomes vertical-flex with inline `TrendingSparkline` beneath when enhanced trending is on. 8-col responsive grid, breakpoint-priority drops. New shared `TrendingSparkline.svelte` with `inline` + `detail` variants. New `trendingHistory.svelte.ts` store with sync lookup helpers.
+- ✅ **Step 6** — PackageDetail integration: `loadDetail` fires `trendingHistory.ensureSeriesLoaded(name, kind)`; new `trend-card` section between description and AI blocks renders the `detail`-variant sparkline. Strictly passive per D4 — no placeholder when toggle is off, the section simply doesn't exist.
+
+`npm run check`: 0 errors, 3 pre-existing warnings (v0.3.1 baseline).
+
+### Done (Step 7 — commit `6901b64`)
+
+- ✅ **trending-collector** for `brew-browser.zerologic.com`. Plain Node 20+ ESM, single dependency `better-sqlite3`. `tools/trending-collector/` directory with:
+  - `lib/common.js` (SQLite schema, HTTP helpers, velocity math mirroring Rust, atomic JSON writes)
+  - `lib/render.js` (regenerates `index.json` top-500 + per-package files with adjacent-day-subtraction-derived daily install estimates)
+  - `seed.js` (one-shot bootstrap deriving 3 historical buckets per package from rolling-window subtraction + writes today's c30/c90/c365 as daily so next nightly run has a predecessor)
+  - `collect.js` (nightly cron entrypoint, 12 concurrent HTTP GETs, INSERT OR IGNORE for idempotent same-day re-runs)
+  - `README.md` (full deploy walkthrough)
+
+`node --check` on every JS file: clean.
+
+### Done (Step 8 — this commit)
+
+- ✅ Memory bank + docs polish:
+  - `projectbrief.md` nine → ten outbound paths; new item (j) for the opt-in endpoint
+  - `decisions.md` new ADR `2026-05-26: Opt-in trust boundary for enhanced trending history (v0.4.0)`
+  - `security.md` §16 full endpoint audit including the actual Caddyfile snippet + threat-model table + pre-launch checklist (the snippet IS the auditable artifact for the privacy claim)
+  - `techContext.md` Trending data sources section rewritten
+  - `backendApi.md` §13.14 v0.4.0 backend surface documented
+  - `frontendComponents.md` v0.4.0 additions block
+  - `docs/release-notes/0.4.0.md` (NEW) user-facing release notes
+  - `README.md` outbound disclosure updated
+- ✅ Task record `tasks/2026-05/19-v0.4.0-backend.md` expanded to cover Steps 1–8 (renamed in scope from "backend" to "ship").
+
+### What's left
+
+**Step 9 — Caddy deploy** on `brew-browser.zerologic.com`. Verbatim config in `security.md` §16.2; verification curl checklist in §16.6. Then bootstrap run (`node seed.js` on the box) → PR into main → v0.4.0 release.
+
+## 2026-05-26 (Step 9 deployed, v0.4.0 PR'd)
+
+Same day, three Caddyfile syntax iterations + three deploy-day bug fixes surfaced and resolved. Full file:line detail in `tasks/2026-05/19-v0.4.0-backend.md` (now spans Steps 1–9 with the verification narrative).
+
+### Done (Step 9 — deploy verification)
+
+- ✅ Collector deployed to `/home/michael/Sites/brew-trending-collector/`. `npm install --omit=dev` succeeded; `better-sqlite3` prebuilt binary loaded in ~3s.
+- ✅ DB bootstrapped — `seed.js` inserted **383,581 rows** across 4 categories × 3 windows × 3 historical buckets + today's daily snapshot.
+- ✅ Initial collect rendered 500 index entries + 18,028 per-package files in ~33s.
+- ✅ Caddyfile updated: `handle_path /trending-history/*` handler + site-wide IP-redacted `log` block (`format filter { wrap json; fields { ... delete } }` worked on the third syntax attempt — earlier versions tried `format json { fields { ... } }` and then `log` nested inside `handle_path`, both wrong; pinned in `security.md` §16.2 with iteration history).
+- ✅ Caddy reload wedged on log-file permission denied — fixed with `sudo chown caddy:caddy` + `sudo systemctl restart caddy` (reset-failed didn't unwedge the reload-notify job; restart bypassed it).
+- ✅ Cron installed: `0 3 * * *`. Dry-run took 43s, pulled in 101 new rows beyond the seed.
+- ✅ Pre-launch checklist from `security.md` §16.6: every curl returns expected (200 on index, 405 on POST, 200 on per-package, 404 on nonexistent). **`grep -cE 'remote_ip|client_ip|X-Forwarded-For|X-Real-Ip' /var/log/caddy/brew-browser.log` returns 0** — the auditable privacy artifact.
+- ✅ Real leaderboard top after the velocity-formula fix: `hermes-agent` (v=1372), `raullenchai/rapid-mlx` (v=159), `grafana/gcx` (v=140), `openssl@4` (v=129) — genuine adoption signal.
+
+### Deploy-day bug fixes that landed on the branch
+
+1. **Velocity formula bias toward brand-new packages.** Old formula compared recent month vs whole-year average (recent month double-counted as baseline), so brand-new packages with c30 == c365 always returned the maximum 12.17 ratio. New formula compares recent month vs **prior 11 months** (c365 - c30). Updated in both Rust and JS byte-for-byte. +1 test pinning brand-new-package-returns-None. Tests 506 → 507.
+2. **Cask URL needed `homebrew-cask` repo segment.** Plus cask items use `cask:` instead of `formula:` field — extractItems now normalizes both shapes.
+3. **Path normalization `Sites/` vs `sites/`.** Server convention is capitalized (Mac convention preserved on the Ubuntu box). Sed-replaced across collector + memory-bank docs.
+
+### Workflow learning
+
+Caddy 2.x's log-filter syntax bit us three times. The deployed-as-is block is now pinned in `security.md` §16.2 with iteration history called out inline so a future reader doesn't accidentally revive an earlier broken draft from git history.
+
+### Status
+
+**Step 9 complete.** PR open against `main`. After merge: cut the v0.4.0 release via the standard pipeline (`sign-and-notarize.sh` → `publish-manifest.sh 0.4.0` → `gh release create` → `gh api PATCH` for asset rename → manifest rsync). Tauri-release gotchas reference: `~/.claude/projects/-Users-michael-Clean/memory/tauri_release_pipeline_gotchas.md`.

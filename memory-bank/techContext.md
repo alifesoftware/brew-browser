@@ -64,9 +64,20 @@ All `brew` calls go through `tokio::process::Command::new("brew")`. Use `--json=
 
 Serialize concurrent `brew` invocations using a `tokio::sync::Mutex<()>` in Tauri's managed state — `brew` does NOT tolerate concurrent operations against its own state.
 
-## Trending data source
+## Trending data sources
 
-`https://formulae.brew.sh/api/analytics/install/30d.json` (and `90d`, `365d` variants). Public Homebrew-maintained JSON. No auth required. Cache in memory ~1 hour to avoid hammering.
+**Always-on (Homebrew first-party):** `https://formulae.brew.sh/api/analytics/install/{30d,90d,365d}.json` plus the v0.4.0 addition `install-on-request/{30d,90d,365d}.json`. Public Homebrew-maintained JSON. No auth required. The backend fetches both endpoints in parallel for the requested window and eager-warms all three windows on first call (via `tokio::task::JoinSet`) so the server-side velocity index is computable from a single user-facing fetch. In-memory cache TTL configurable in Settings → Network; default 60 minutes.
+
+**Opt-in (project-operated, v0.4.0+):** `https://brew-browser.zerologic.com/trending-history/*` — the Enhanced Trending History endpoint. Distinct trust boundary from the Homebrew first-party paths above. Gated by `Settings.enhanced_trending_enabled` (default false). Served as static JSON by Caddy on the same vhost that serves the updater manifest. Two URL shapes:
+
+- `/trending-history/index.json` — summary blob (top-500 packages with server-precomputed velocity index + ~30-point compact sparkline). Fetched once on Trending tab mount; powers inline row sparklines.
+- `/trending-history/{kind}/{name}.json` — per-package full series. Fetched on demand from PackageDetail.
+
+**Collector:** `tools/trending-collector/` — plain Node 20+ ESM cron job that lives on `brew-browser.zerologic.com`. Runs nightly at 03:00 server time, hits the 12 (4 categories × 3 windows) formulae.brew.sh endpoints concurrently, appends rows to `/home/michael/data/brew-trending/db.sqlite` (composite-PK so re-runs are no-ops), then regenerates the static JSON tree at `/home/michael/Sites/brew-trending/` for Caddy to serve.
+
+**Day-zero seed trick:** the bootstrap (`seed.js`) derives three historical "buckets" per package from rolling-window subtraction (c30, c90-c30, c365-c90), tagged `source='seed'`, so charts have data the day the collector turns on. From day 1 onward the nightly collector accumulates real daily snapshots; after ~30 days, adjacent-day `count_30d` subtraction produces clean per-day install estimates that dominate the chart visually.
+
+**Privacy posture for the project-operated endpoint:** IP redacted at the Caddy log layer (`request>remote_ip "0.0.0.0"`), no cookies set/accepted, GET-only (writes 405), 6h Cache-Control. Documented + auditable in `security.md` §16 (the actual Caddy snippet lives there so anyone can `cat Caddyfile` on the server and verify).
 
 ## Known sharp edges
 

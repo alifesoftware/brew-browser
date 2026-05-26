@@ -442,8 +442,18 @@ export interface TrendingEntry {
   rank: number;
   name: string;
   kind: PackageKind;
+  /** Cumulative installs over the window, inclusive of dependency-pulled
+      installs (the leaderboard-dominator metric). */
   installCount: number;
   installCountFormatted: string;
+  /** v0.4.0 — explicit user-initiated installs (excludes deps). Optional
+      because the secondary endpoint can soft-fail; the row still ships. */
+  installOnRequestCount?: number;
+  installOnRequestCountFormatted?: string;
+  /** v0.4.0 — server-derived velocity index. 1.0 ≈ steady, >1.5 surging,
+      <0.7 cooling. None when the other two windows haven't cached yet
+      or the package's annual count is too small for a stable ratio. */
+  velocityIndex?: number;
   installedLocally: boolean;
 }
 
@@ -453,6 +463,54 @@ export interface TrendingReport {
   cacheAgeSeconds: number;
   totalCount: number;
   entries: TrendingEntry[];
+}
+
+// ---------- v0.4.0: Trending history (opt-in endpoint) ----------
+
+/**
+ * Origin of a history point. Lets the UI fade or label the historical-
+ * only portion of a sparkline (`seed`) distinctly from the real daily
+ * snapshots (`daily`) collected from the day the user opted in.
+ */
+export type TrendingHistorySource = "seed" | "daily";
+
+export interface TrendingHistoryPoint {
+  /** ISO date YYYY-MM-DD of the snapshot (or bucket midpoint for seed). */
+  date: string;
+  count30d?: number;
+  count90d?: number;
+  count365d?: number;
+  countInstallOnRequest30d?: number;
+  /** Server-derived per-day install estimate. None for seed points and
+      for daily points without a usable 30-day-prior predecessor. */
+  estimatedDailyInstalls?: number;
+  source: TrendingHistorySource;
+}
+
+export interface TrendingHistorySeries {
+  name: string;
+  kind: PackageKind;
+  points: TrendingHistoryPoint[];
+  /** ISO timestamp the collector wrote this series. */
+  generatedAt: string;
+  /** Local cache age in seconds. */
+  cacheAgeSeconds: number;
+}
+
+export interface TrendingHistoryIndexEntry {
+  name: string;
+  kind: PackageKind;
+  velocityIndex?: number;
+  /** Compact per-day series for inline sparklines (~30 data points).
+      The frontend treats it as opaque chart data. */
+  sparkline: number[];
+}
+
+export interface TrendingHistoryIndex {
+  generatedAt: string;
+  packages: TrendingHistoryIndexEntry[];
+  /** Local cache age in seconds. */
+  cacheAgeSeconds: number;
 }
 
 // =========================================================
@@ -504,6 +562,12 @@ export interface Settings {
       opts in via Settings → Network → Updates. Suppressed (no fetch)
       while Offline Mode is on, regardless of this flag. */
   updateAutoCheck: boolean;
+  /** v0.4.0 — when true, the Trending tab + PackageDetail fetch
+      historical install trends from `brew-browser.zerologic.com/trending-
+      history/*` to power per-row inline sparklines and per-package
+      charts. Off by default — distinct trust boundary from the always-on
+      formulae.brew.sh paths. Suppressed by Offline Mode regardless. */
+  enhancedTrendingEnabled: boolean;
 }
 
 /** Defaults matching the Rust `Settings::default()`. Used when seeding
@@ -524,6 +588,9 @@ export const SETTINGS_DEFAULTS: Settings = {
   // Phase 15 — auto-check for new brew-browser releases. Off by
   // default per the "zero outbound unless user consented" posture.
   updateAutoCheck: false,
+  // v0.4.0 — opt-in enhanced trending history. Off by default; new
+  // trust boundary (project infra vs. Homebrew first-party).
+  enhancedTrendingEnabled: false,
 };
 
 // =========================================================
@@ -682,6 +749,7 @@ export type BrewErrorPayload =
   | { code: "brewfile_not_found"; id: string }
   | { code: "internal";           message: string }
   | { code: "paranoid_mode_blocked"; feature: string }
+  | { code: "feature_disabled";    feature: string }
   | { code: "github_rate_limited"; resetAt: number }
   | { code: "keychain_unavailable"; message: string }
   | { code: "auth_required" }
@@ -715,7 +783,9 @@ export function brewErrorMessage(e: BrewErrorPayload): string {
     case "brewfile_not_found":  return `Brewfile "${e.id}" not found.`;
     case "internal":            return `Internal error: ${e.message}`;
     case "paranoid_mode_blocked":
-      return `Paranoid mode is on — ${e.feature} is blocked. Disable it in Settings → Network.`;
+      return `Offline Mode is on — ${e.feature} is blocked. Disable it in Settings → Network.`;
+    case "feature_disabled":
+      return `${e.feature} is disabled. Enable it in Settings → Network.`;
     case "github_rate_limited": {
       const reset = e.resetAt > 0 ? new Date(e.resetAt * 1000).toLocaleTimeString() : "soon";
       return `GitHub API rate limit reached. Resets at ${reset}. Sign in to lift the limit.`;

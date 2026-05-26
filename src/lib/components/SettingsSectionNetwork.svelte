@@ -27,6 +27,7 @@
 
   import { settings } from "$lib/stores/settings.svelte";
   import SettingsSectionUpdates from "$lib/components/SettingsSectionUpdates.svelte";
+  import SettingsSectionTrendingHistory from "$lib/components/SettingsSectionTrendingHistory.svelte";
   import type {
     CaskIconMode,
     CatalogAutoRefresh,
@@ -121,6 +122,13 @@
           "all casks with a homepage"
         }.`,
         allowed: !paranoid && s.caskIconMode !== "off",
+      },
+      {
+        label: "brew-browser.zerologic.com/trending-history",
+        desc: s.enhancedTrendingEnabled
+          ? "Enhanced trending history — per-package historical install trends for sparklines + charts."
+          : "Enhanced trending history — opt-in, currently disabled.",
+        allowed: !paranoid && s.enhancedTrendingEnabled,
       },
       {
         label: "brew",
@@ -307,6 +315,11 @@
     {#if settings.error}
       <p class="callout-error">{settings.error}</p>
     {/if}
+
+    <!-- v0.4.0: Enhanced trending history — opt-in, distinct trust
+         boundary (project infra, not Homebrew first-party). Lives in
+         Network because it's a network opt-in. -->
+    <SettingsSectionTrendingHistory />
 
     <!-- Phase 15: Updates subsection lives at the bottom of Network. -->
     <SettingsSectionUpdates />

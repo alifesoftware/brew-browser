@@ -45,6 +45,8 @@ import type {
   SearchResults,
   Service,
   Settings,
+  TrendingHistoryIndex,
+  TrendingHistorySeries,
   TrendingReport,
   TrendingWindow,
   UpdateCheckOutcome,
@@ -245,6 +247,34 @@ export function trendingFetch(window: TrendingWindow): Promise<TrendingReport> {
 
 export function trendingClearCache(): Promise<void> {
   return invoke<void>("trending_clear_cache");
+}
+
+// ----- v0.4.0: opt-in history endpoint (brew-browser.zerologic.com) -----
+
+/**
+ * Fetch the trending-history summary blob — top-N packages with
+ * server-precomputed velocity index + compact sparkline. Single fetch
+ * on Trending tab mount; powers inline sparklines on every row.
+ *
+ * Throws `feature_disabled` when `enhancedTrendingEnabled` is off, and
+ * `paranoid_mode_blocked` when Offline Mode is on. Falls back to stale
+ * cache on transient network failure (same contract as `trendingFetch`).
+ */
+export function trendingHistoryIndex(): Promise<TrendingHistoryIndex> {
+  return invoke<TrendingHistoryIndex>("trending_history_index");
+}
+
+/**
+ * Fetch the per-package historical series — full set of seed-bucket +
+ * daily points. Called on demand from PackageDetail's sparkline.
+ *
+ * Cached for 6h per (name, kind) on a 500-entry LRU.
+ */
+export function trendingHistoryFetch(
+  name: string,
+  kind: PackageKind,
+): Promise<TrendingHistorySeries> {
+  return invoke<TrendingHistorySeries>("trending_history_fetch", { name, kind });
 }
 
 // ============================================================

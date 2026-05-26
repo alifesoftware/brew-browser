@@ -227,3 +227,32 @@ Net new components since the last inventory refresh (2026-05-23):
 | `GithubMarkIcon` | `GithubMarkIcon.svelte` | `size?: number`, `class?: string` | — | Real Octocat SVG, path lifted from Primer/Octicons (MIT). Used because Lucide strips brand icons (trademark policy). API matches Lucide-icon shape so it slots into icon-anywhere call sites. Rendered as the Octocat chip in TitlebarControls. |
 | `UpgradeModal` | `UpgradeModal.svelte` | `open: boolean`, `onClose: () => void` | `selected: Map<string, boolean>`, `upgrading: boolean` | Curated multi-select Upgrade flow. Lists every outdated package with checkbox + name + current→target + pinned badge (pinned packages start unchecked + disabled — brew refuses to upgrade them anyway). Top toolbar: live "N of M selected" + Select all / Deselect all. On submit: single batched `brew_upgrade_many(names)` IPC streams into the Activity drawer. Errors flow through `reportableToastError`. Triggered from the Dashboard Updates card's "Choose…" button. |
 
+### v0.4.0 additions
+
+| Component | File | Props | State owned | Notes |
+|---|---|---|---|---|
+| `TrendingSparkline` | `TrendingSparkline.svelte` | `data: number[]`, `variant?: "inline" \| "detail"`, `title?: string` | local: `dims`, `pathD`, `lastPoint` derived | Shared SVG line sparkline. `inline` variant is 60×16 with stroke-only (used in trending list rows); `detail` is 360×80 with a "current" dot at the right edge (used in PackageDetail). Auto-fits min/max scaling so trajectory is the message regardless of magnitude. Renders nothing gracefully when data is empty, all-zero, or single-point — the empty branch renders an em-dash placeholder so column heights stay consistent across packages. |
+| `SettingsSectionTrendingHistory` | `SettingsSectionTrendingHistory.svelte` | (none — reads `settings` store) | — | Opt-in subsection for the `brew-browser.zerologic.com/trending-history/*` endpoint. Single toggle bound to `settings.enhancedTrendingEnabled`; disabled and "locked off" message when Offline Mode is on. Hint copy spells out the data practice in plain language (only the package name sent, no IP logging, no cookies, no fingerprinting). Modeled on `SettingsSectionUpdates.svelte` — same nested-section pattern, mounted at the bottom of `SettingsSectionNetwork.svelte` alongside the existing Updates subsection. |
+
+**Trending tab restructure** (`Trending.svelte`):
+- Default sort key changed from `rank` (asc) to `velocity` (desc) — the headline v0.4.0 change. The whole point of the work is to surface what's accelerating, not the dep-chain leaderboard.
+- New `Velocity` column with `Flame` / `Snowflake` / dash badge + numeric value. Tier-coded: surge (`>= 1.5`) accent-warm, cool (`<= 0.5`) accent-cool, neutral plain. Sort with None-last regardless of direction so missing-velocity entries don't win the leaderboard.
+- New `velocityOf(name, kind, fallback)` helper prefers the index blob's server-precomputed value (freshest, nightly) and falls back to the `velocityIndex` carried on each `TrendingEntry` from the backend.
+- Count cell becomes vertical-flex: formatted number on top, inline `TrendingSparkline` beneath (when `enhancedReady` derived is true). One HTTP GET to `/trending-history/index.json` on tab mount populates every row's sparkline — no per-row fetches.
+- Responsive grid reworked from 7 cols to 8 (added Velocity); breakpoints drop columns in priority order (`<=1200px` drops Trail, `<=1000px` also drops Description, `<=800px` also drops Version, `<=640px` also drops Type).
+
+**PackageDetail integration** (`PackageDetail.svelte`):
+- New `trend-card` section between the description/homepage area and the AI-enriched blocks. Renders the `detail`-variant `TrendingSparkline` from a full `TrendingHistorySeries`.
+- Strictly **passive** per D4: NO placeholder when the toggle is off. The section simply doesn't exist. No "Enable in Settings" CTA, no banner.
+- `loadDetail` fires `trendingHistory.ensureSeriesLoaded(name, kind)` after `brewInfo`. The store's internal `enabled` getter no-ops when the toggle is off, so the call is always safe.
+- Sub-header label distinguishes seed-only history ("Bootstrap + daily snapshots — granularity grows over time") from real daily history ("Daily install snapshots").
+
+**New store** (`trendingHistory.svelte.ts`):
+- `index: TrendingHistoryIndex | null` — the summary blob.
+- `seriesByKey: Map<string, TrendingHistorySeries>` — per-package full series cache (key = `"{kind}:{name}"`).
+- `loadingIndex` / `loadingSeriesKeys: Set<string>` — in-flight markers prevent redundant concurrent fetches.
+- `enabled` getter — single source of truth for "toggle on AND paranoid off."
+- `ensureIndexLoaded()`, `ensureSeriesLoaded(name, kind)` — idempotent, silent-on-failure (feature is enrichment, not load-bearing).
+- `entryFor`, `sparklineFor`, `velocityFor` — sync lookups over the cached index. Lazy lookup table rebuilt only when the index changes.
+- `seriesFor(name, kind)` — sync lookup over the cached per-package series.
+

@@ -2,40 +2,73 @@
   import { onMount } from "svelte";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import TrendingUp from "@lucide/svelte/icons/trending-up";
+  import Flame from "@lucide/svelte/icons/flame";
+  import Snowflake from "@lucide/svelte/icons/snowflake";
 
   import Button from "./Button.svelte";
   import Pill from "./Pill.svelte";
   import LoadingState from "./LoadingState.svelte";
   import EmptyState from "./EmptyState.svelte";
   import SortableHeader from "./SortableHeader.svelte";
+  import TrendingSparkline from "./TrendingSparkline.svelte";
   import { trending } from "$lib/stores/trending.svelte";
+  import { trendingHistory } from "$lib/stores/trendingHistory.svelte";
+  import { settings } from "$lib/stores/settings.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
   import { enrichment } from "$lib/stores/enrichment.svelte";
   import { catalog } from "$lib/stores/catalog.svelte";
-  import type { TrendingEntry, TrendingWindow } from "$lib/types";
+  import type { PackageKind, TrendingEntry, TrendingWindow } from "$lib/types";
 
   onMount(() => {
     if (!trending.report) trending.load();
-    // Prime the enrichment store so AI-enriched friendly names start
-    // resolving as soon as data lands.
     enrichment.ensureLoaded();
-    // Description + version columns read from the catalog's per-token
-    // maps — prime them so the columns light up as soon as data lands.
     void catalog.ensureSummariesLoaded();
+    // v0.4.0 — when enhanced trending is on, fetch the summary blob
+    // once. Provides inline sparkline + an authoritative velocity
+    // index per row from one HTTP GET.
+    void trendingHistory.ensureIndexLoaded();
   });
 
-  /** AI-enriched friendly name for a token, or null. Inline call from
-   *  row markup; sync Map.get under the hood. */
   function friendlyOf(token: string): string | null {
     return enrichment.friendlyName(token);
   }
 
+  /** True only when the opt-in toggle is on AND Offline Mode is off
+      AND we have an index in hand. Gates every inline sparkline + the
+      "history-side" velocity override. */
+  let enhancedReady = $derived(
+    settings.effective.enhancedTrendingEnabled &&
+      !settings.effective.paranoidMode &&
+      trendingHistory.index !== null,
+  );
+
+  /** Resolve the effective velocity for an entry. Prefers the history
+      endpoint's number (freshest, server-precomputed nightly) and falls
+      back to the backend's per-fetch computation from rolling windows. */
+  function velocityOf(name: string, kind: PackageKind, fallback?: number): number | null {
+    const fromHistory = enhancedReady ? trendingHistory.velocityFor(name, kind) : null;
+    if (fromHistory !== null) return fromHistory;
+    return fallback ?? null;
+  }
+
+  /** Velocity tier classification for the badge: >=1.5 surging,
+      <=0.5 cooling, otherwise neutral. */
+  function velocityTier(v: number | null): "surge" | "cool" | "neutral" | "none" {
+    if (v === null) return "none";
+    if (v >= 1.5) return "surge";
+    if (v <= 0.5) return "cool";
+    return "neutral";
+  }
+
   const windows: TrendingWindow[] = ["30d", "90d", "365d"];
 
-  type SortKey = "rank" | "name" | "kind" | "installs";
-  let sortKey: SortKey = $state("rank");
-  let sortDir: "asc" | "desc" = $state("asc");
+  type SortKey = "rank" | "name" | "kind" | "installs" | "velocity";
+  // v0.4.0 — default sort changes from rank to velocity desc. The
+  // whole point is to surface what's actually accelerating, not what
+  // dep-chains have already lifted to the top.
+  let sortKey: SortKey = $state("velocity");
+  let sortDir: "asc" | "desc" = $state("desc");
 
   function changeSort(key: string) {
     const k = key as SortKey;
@@ -43,8 +76,8 @@
       sortDir = sortDir === "asc" ? "desc" : "asc";
     } else {
       sortKey = k;
-      // Numeric/rank-like keys default to descending on first click (most-installed first)
-      sortDir = k === "installs" ? "desc" : "asc";
+      // Numeric metrics default to descending on first click.
+      sortDir = k === "installs" || k === "velocity" ? "desc" : "asc";
     }
   }
 
@@ -59,6 +92,18 @@
         case "name":     cmp = a.name.localeCompare(b.name); break;
         case "kind":     cmp = a.kind.localeCompare(b.kind); break;
         case "installs": cmp = a.installCount - b.installCount; break;
+        case "velocity": {
+          // Push None-velocity entries to the bottom regardless of
+          // direction so "no velocity available" never wins the leaderboard.
+          const va = velocityOf(a.name, a.kind, a.velocityIndex);
+          const vb = velocityOf(b.name, b.kind, b.velocityIndex);
+          if (va === null && vb === null) cmp = 0;
+          else if (va === null) cmp = sortDir === "asc" ? 1 : -1; // None last
+          else if (vb === null) cmp = sortDir === "asc" ? -1 : 1; // None last
+          else cmp = va - vb;
+          // Tier-1 sort: never multiplied — keep None at bottom.
+          return cmp === 0 ? 0 : cmp * mul;
+        }
       }
       return cmp * mul;
     });
@@ -119,6 +164,7 @@
         <span class="header-desc">Description</span>
         <span class="header-version">Version</span>
         <SortableHeader label="Type" sortKey="kind" active={sortKey === "kind"} dir={sortDir} onSort={changeSort} />
+        <SortableHeader label="Velocity" sortKey="velocity" active={sortKey === "velocity"} dir={sortDir} onSort={changeSort} align="right" />
         <SortableHeader label="Installs" sortKey="installs" active={sortKey === "installs"} dir={sortDir} onSort={changeSort} align="right" />
         <span></span>
       </div>
@@ -126,6 +172,9 @@
         {#each sortedEntries as e (e.name + e.kind)}
           {@const installed = e.installedLocally || packages.isInstalled(e.name, e.kind)}
           {@const isSelected = ui.selectedPackage?.name === e.name && ui.selectedPackage?.kind === e.kind}
+          {@const v = velocityOf(e.name, e.kind, e.velocityIndex)}
+          {@const tier = velocityTier(v)}
+          {@const spark = enhancedReady ? trendingHistory.sparklineFor(e.name, e.kind) : null}
           <li>
             <button
               class="row"
@@ -143,7 +192,24 @@
               <span class="desc truncate text-muted">{enrichment.summaryOf(e.name) ?? catalog.descOf(e.name, e.kind) ?? ""}</span>
               <span class="version truncate text-muted">{catalog.versionOf(e.name, e.kind) ?? ""}</span>
               <span class="kind"><Pill tone={e.kind === "formula" ? "formula" : "cask"}>{e.kind}</Pill></span>
-              <span class="count mono">{e.installCountFormatted}</span>
+              <span class="velocity mono" class:surge={tier === "surge"} class:cool={tier === "cool"}>
+                {#if tier === "surge"}
+                  <Flame size={12} aria-hidden="true" />
+                {:else if tier === "cool"}
+                  <Snowflake size={12} aria-hidden="true" />
+                {/if}
+                {#if v !== null}
+                  <span class="vel-num">{v.toFixed(2)}</span>
+                {:else}
+                  <span class="vel-num text-muted">—</span>
+                {/if}
+              </span>
+              <span class="count-cell mono">
+                <span class="count-num">{e.installCountFormatted}</span>
+                {#if spark}
+                  <span class="count-spark"><TrendingSparkline data={spark} variant="inline" title={`${e.name} install trend`} /></span>
+                {/if}
+              </span>
               <span class="trail">
                 {#if installed}<Pill tone="success">installed</Pill>{/if}
               </span>
@@ -175,41 +241,56 @@
     .refresh-wrap { display: none; }
   }
 
-  /* Trending row has 7 cells (# / NAME / DESC / VERSION / TYPE /
-     COUNT / TRAIL). Drop columns in priority order from widest-but-
-     least-essential first:
-       <= 1100px: drop Trail (7th, installed pill)
-       <=  900px: also drop Description (3rd)
-       <=  720px: also drop Version (4th); leave # / NAME / TYPE / COUNT. */
-  @media (max-width: 1100px) {
+  /* Trending row has 8 cells (# / NAME / DESC / VERSION / TYPE /
+     VELOCITY / COUNT / TRAIL). v0.4.0 added VELOCITY between TYPE
+     and COUNT. Responsive drops from widest-but-least-essential first:
+       <= 1200px: drop Trail (8th, installed pill)
+       <= 1000px: also drop Description (3rd)
+       <=  800px: also drop Version (4th); leave # / NAME / TYPE / VELOCITY / COUNT
+       <=  640px: also drop Type (5th); leave # / NAME / VELOCITY / COUNT */
+  @media (max-width: 1200px) {
     .list-header,
     .row {
-      grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 120px;
+      grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 90px 120px;
     }
-    .list-header > :nth-child(7),
-    .row > :nth-child(7) { display: none; }
+    .list-header > :nth-child(8),
+    .row > :nth-child(8) { display: none; }
   }
-  @media (max-width: 900px) {
+  @media (max-width: 1000px) {
     .list-header,
     .row {
-      grid-template-columns: 48px minmax(0, 1fr) 100px 80px 120px;
+      grid-template-columns: 48px minmax(0, 1fr) 100px 80px 90px 120px;
     }
     .list-header > :nth-child(3),
-    .list-header > :nth-child(7),
+    .list-header > :nth-child(8),
     .row > :nth-child(3),
-    .row > :nth-child(7) { display: none; }
+    .row > :nth-child(8) { display: none; }
   }
-  @media (max-width: 720px) {
+  @media (max-width: 800px) {
     .list-header,
     .row {
-      grid-template-columns: 48px minmax(0, 1fr) 80px 120px;
+      grid-template-columns: 48px minmax(0, 1fr) 80px 90px 120px;
     }
     .list-header > :nth-child(3),
     .list-header > :nth-child(4),
-    .list-header > :nth-child(7),
+    .list-header > :nth-child(8),
     .row > :nth-child(3),
     .row > :nth-child(4),
-    .row > :nth-child(7) { display: none; }
+    .row > :nth-child(8) { display: none; }
+  }
+  @media (max-width: 640px) {
+    .list-header,
+    .row {
+      grid-template-columns: 48px minmax(0, 1fr) 90px 120px;
+    }
+    .list-header > :nth-child(3),
+    .list-header > :nth-child(4),
+    .list-header > :nth-child(5),
+    .list-header > :nth-child(8),
+    .row > :nth-child(3),
+    .row > :nth-child(4),
+    .row > :nth-child(5),
+    .row > :nth-child(8) { display: none; }
   }
 
   /* Sidebar theme-group pattern: sunken background, no border,
@@ -237,7 +318,8 @@
   .list-wrap { flex: 1; overflow-y: auto; min-height: 0; }
   .list-header {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 120px 100px;
+    /* 8 columns: # / NAME / DESC / VERSION / TYPE / VELOCITY / COUNT+SPARK / TRAIL */
+    grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 90px 120px 100px;
     gap: var(--space-3);
     padding: var(--space-2) var(--space-3);
     background: var(--color-surface);
@@ -255,7 +337,7 @@
   .list { display: flex; flex-direction: column; }
   .row {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 120px 100px;
+    grid-template-columns: 48px minmax(0, 1fr) minmax(0, 2fr) 100px 80px 90px 120px 100px;
     align-items: center;
     gap: var(--space-3);
     width: 100%;
@@ -272,7 +354,7 @@
     color: var(--color-text-inverse);
   }
   .row.selected .rank,
-  .row.selected .count { color: inherit; }
+  .row.selected .count-cell { color: inherit; }
   .row.selected .desc,
   .row.selected .version { color: inherit; opacity: 0.85; }
   .row.selected .friendly-subtitle {
@@ -332,6 +414,44 @@
     line-height: 1.2;
     margin-top: 1px;
   }
-  .count { font-variant-numeric: tabular-nums; text-align: right; color: var(--color-text-secondary); }
+  /* v0.4.0 — velocity cell. Badge + numeric, color-coded by tier. */
+  .velocity {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-secondary);
+  }
+  .velocity.surge { color: #b8542a; }   /* same accent family — warm/orange for surging */
+  .velocity.cool  { color: #4a7fa8; }   /* cool blue */
+  .vel-num { font-size: var(--text-body-sm); }
+  .row.selected .velocity,
+  .row.selected .velocity.surge,
+  .row.selected .velocity.cool { color: inherit; }
+
+  /* v0.4.0 — count cell becomes vertical-flex with a tiny inline
+     sparkline beneath the formatted count. Sparkline only renders
+     when enhanced trending is on (`enhancedReady` gate in the markup). */
+  .count-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 1px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-secondary);
+    text-align: right;
+  }
+  .count-num {
+    font-size: var(--text-body);
+    line-height: 1.1;
+  }
+  .count-spark {
+    line-height: 0;
+    color: var(--color-accent, #b8542a);
+  }
+  .row.selected .count-spark { color: var(--color-text-inverse); opacity: 0.85; }
+
   .trail { display: flex; justify-content: flex-end; }
 </style>
