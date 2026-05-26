@@ -44,6 +44,8 @@
   import { reportableToastError } from "$lib/util/reportIssue";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import IssueModal from "./IssueModal.svelte";
+  import TrendingSparkline from "./TrendingSparkline.svelte";
+  import { trendingHistory } from "$lib/stores/trendingHistory.svelte";
   import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail } from "$lib/types";
 
   // Categories file is small; ensure it's loaded so the pills can render. Idempotent.
@@ -121,6 +123,11 @@
     } finally {
       loading = false;
     }
+    // v0.4.0 — fire-and-forget enhanced-trending series fetch. The
+    // store's internal `enabled` getter no-ops when the toggle is off
+    // or Offline Mode is on, so this is safe to call unconditionally.
+    // Soft-fails — sparkline simply doesn't appear if fetch fails.
+    void trendingHistory.ensureSeriesLoaded(name, kind);
   }
 
   async function doInstall() {
@@ -799,6 +806,33 @@
             <span class="truncate">{pkg.homepage}</span>
             <ExternalLink size={12} />
           </button>
+        {/if}
+
+        <!-- v0.4.0: install-trend sparkline. Strictly passive (D4): only
+             renders when enhanced trending is on AND we actually have a
+             series with chartable data for this package. No placeholder
+             when off — the section simply doesn't exist. -->
+        {#if trendingHistory.enabled}
+          {@const series = trendingHistory.seriesFor(pkg.name, pkg.kind)}
+          {#if series && series.points.length >= 2}
+            <section class="trend-card" aria-label={`Install trend for ${pkg.name}`}>
+              <header class="trend-head">
+                <h3>Install trend</h3>
+                <span class="trend-meta text-muted">
+                  {#if series.points.some((p) => p.source === "seed")}
+                    Bootstrap + daily snapshots — granularity grows over time
+                  {:else}
+                    Daily install snapshots
+                  {/if}
+                </span>
+              </header>
+              <TrendingSparkline
+                data={series.points.map((p) => p.estimatedDailyInstalls ?? p.count30d ?? 0)}
+                variant="detail"
+                title={`${pkg.name} install trend`}
+              />
+            </section>
+          {/if}
         {/if}
 
         <!-- Phase 13: "Why install this?" use-case bullets. -->
@@ -1492,6 +1526,31 @@
     align-items: center;
     flex-wrap: wrap;
     gap: var(--space-2);
+  }
+
+  /* v0.4.0 — install-trend chart card in PackageDetail. Same gap/H3
+     rhythm as enriched-section so it blends with the surrounding AI
+     blocks. */
+  .trend-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+  .trend-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .trend-head h3 {
+    font-size: var(--text-h3);
+    font-weight: var(--fw-semibold);
+    margin: 0;
+  }
+  .trend-meta {
+    font-size: var(--text-body-sm);
   }
 
   .use-cases {
