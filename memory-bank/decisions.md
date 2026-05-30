@@ -320,3 +320,26 @@ The v0.4.0 outbound enumeration is at ten paths (path j is the most recent — o
 - "Mock the subprocess with a recorded fixture." Useful, but only after the fixture has been captured live at least once. The mock-first failure mode is "mock matches expectations; reality differs."
 
 **Outcome:** added the §"Smoke test cycle" block to `tasks/2026-05/20-v0.5.0-vulnerability-scanning.md` documenting the five bugs + their fixes + the captured-fixture regression pin. Future subprocess-integration tasks (e.g. if we ever wrap `brew livecheck`, `brew bundle-doctor`, or any other third-party brew subcommand) should reference this ADR before committing to a "defensive parse" without a captured fixture.
+
+## 2026-05-30: Distribute via own Homebrew tap (cask), official cask deferred
+
+**Context:** Post-launch on r/MacOS, the most common question was "is there a `brew install`?" The only distribution was a manual `.dmg`. Two paths: (a) our own tap repo, or (b) submit the cask to the official `Homebrew/homebrew-cask`.
+
+**Decision:** Ship our own tap now (`github.com/msitarzewski/homebrew-brew-browser`), defer the official-cask submission until the project clears the notability bar.
+
+**Rationale:**
+- Official `homebrew-cask` has a notability gate: under 75 stars / 30 forks / 30 watchers (standard) is auto-rejected, measured on *the packaged repo only* — the author's other repos (incl. agency-agents) don't count. brew-browser was at 45★ / 3 forks at decision time, below the bar.
+- The own-tap path ships today with zero review latency and full control; it's the same model auto-brew and Applite use. Users run `brew tap msitarzewski/brew-browser && brew install --cask brew-browser`.
+- Revisit official submission at ~75★. Self-submitted PRs (author == repo owner) face an even higher bar (225★ / 90 forks / 90 watchers), so a non-author submitter or crossing the standard bar with social-media-fanfare exception is the likely route.
+
+**Implementation notes:**
+- Cask installs the prebuilt, signed, notarized `.dmg` — preserves the Gatekeeper-clean guarantee. `app "brew-browser.app"`, `zap trash:` covers app-support/caches/prefs/keychain for clean uninstall.
+- `depends_on macos: ">= :ventura"` (Ventura-or-newer). **`brew style --fix` rewrites this to the bare `:ventura` symbol, which pins to Ventura *exactly* and would block Sonoma/Sequoia/Tahoe.** A comment block in the cask warns against accepting that autocorrect. The cosmetic style offense is accepted in exchange for correct version semantics.
+- Verified end-to-end before publishing: `brew audit --cask brew-browser` exit 0, `brew fetch --cask brew-browser` downloads + verifies sha256.
+- Each release bumps the cask `version` + `sha256`. Auto-bump in `tools/release/` is a documented TODO; manual `shasum` + edit until then.
+
+**Rejected / deferred:**
+- **From-source formula (`brew install --HEAD`)** — deferred experiment. Compiling Tauri inside a formula sandbox is unproven and the result would be unsigned/un-notarized (loses the core security guarantee), so it's not the default path. Only ever runs on explicit user `--HEAD` request, never automatically.
+- **Nightly prebuilt cask-HEAD via CI** — deferred; needs Apple signing secrets in GitHub Actions + notarize-per-commit.
+
+**Outcome:** tap live at `msitarzewski/homebrew-brew-browser`. README + landing page updated to lead with the `brew` install. projectbrief Distribution section added.
