@@ -346,3 +346,23 @@ The v0.4.0 outbound enumeration is at ten paths (path j is the most recent — o
 - **Nightly prebuilt cask-HEAD via CI** — deferred; needs Apple signing secrets in GitHub Actions + notarize-per-commit.
 
 **Outcome:** tap live at `msitarzewski/homebrew-brew-browser`. README + landing page updated to lead with the `brew` install. projectbrief Distribution section added.
+
+## 2026-05-30: Native Swift / SwiftUI / Liquid Glass rebuild (experiment)
+
+**Context:** The v0.5.0 launch drew recurring "Tauri isn't native" criticism. The 2026-05-23 "Tauri 2 over Electron/Flutter/GPUI" decision still holds for the shipped product, but it's worth empirically testing how close a fully native rebuild gets — both to answer the criticism and to evaluate macOS 26's Liquid Glass as a possible future direction.
+
+**Decision:** Spin up an experiment branch (`experiment/native-swift-liquid-glass`) that **ports** the existing interface to Swift 6 + SwiftUI + Liquid Glass (macOS 26 Tahoe), living in `native/` as a Swift Package. This is explicitly a port, **not** a redesign: data sources and functionality stay identical to the Tauri app (trending, AI-enhanced categories, GitHub integration, vulnerability scanning, auto-update). Does **not** supersede the 2026-05-23 Tauri decision — the production app stays Tauri on `main` unless/until this experiment proves out.
+
+**Sub-decisions:**
+- **SPM (`swift build`), not an Xcode project.** Full Xcode is installed but `xcode-select` points at Command Line Tools, so `xcodebuild` is unavailable from the CLI. `swift build` works under CLT and links every Liquid Glass API. `native/build-app.sh` wraps the SPM binary into a launchable `.app` (SPM alone produces a bare binary with no `Info.plist`, which macOS treats as a background process). Switching the toolchain (`sudo xcode-select -s`) was declined to keep the CLI build path.
+- **Stock Apple scaffolding only — no overrides.** No custom window chrome, no `NSVisualEffectView`, no faked backgrounds. Established after several failed attempts to hand-build Xcode-like chrome: `NavigationSplitView`, `.inspector`, `Settings {}` + `SettingsLink`, `TabView`, `Form` carry the whole UI. When the stock default and a pixel-perfect custom look disagree, the stock default wins. (Contrast the 2026-05-24 Tauri "Vibrancy via `window-vibrancy`" decision — the native build deliberately avoids that whole class of window-material hacking.)
+- **Reuse the Tauri data contracts verbatim.** `settings.json` keeps the same path + schema (Swift `AppSettings` ⇄ Rust `Settings`); bundled `categories.json` + `enrichment.json` are copied from `src-tauri/data/` (uncompressed in the native build for now). The brew/vulns/github/trending behaviors are reimplemented as Swift `actor`s mirroring the Rust modules, not redesigned.
+
+**Rationale:**
+- Settles the "native" question with a real artifact instead of a debate.
+- Keeping it a strict port means the comparison is apples-to-apples and the memory bank remains the single spec for both shells.
+- Stock-only keeps the experiment honest about what the platform gives for free vs. what required fighting it.
+
+**Trade-off accepted:** Two codebases for the same product while the experiment runs. Mitigated by it being clearly branch-scoped and uncommitted; if it doesn't prove out, the branch is abandoned with zero impact on `main`. Sparkle-based in-app updates are the one subsystem not yet ported (deferred).
+
+**References:** `native/README.md`, `techContext.md` ("Native rebuild" section), `tasks/2026-05/21-native-swift-liquid-glass-rebuild.md`, `progress.md` (2026-05-31), cross-session memory `project-native-swift-rebuild.md`.

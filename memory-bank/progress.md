@@ -824,3 +824,28 @@ Regression-pinned by `vulns::client::tests::raw_scan_result_parses_real_brew_vul
 - Official `Homebrew/homebrew-cask` submission once past 75★.
 - Title-bar/UX redesign (scoped with user, Option A: standard title bar, drop vibrancy) — not built; premature, parked.
 - From-source `--HEAD` formula — deferred experiment; only ever on explicit user request.
+
+## 2026-05-31 (native Swift / Liquid Glass rebuild — experiment branch)
+
+Off-`main` experiment on branch `experiment/native-swift-liquid-glass`: a faithful **port** of the Tauri app's interface to Swift 6 + SwiftUI + Liquid Glass (macOS 26 Tahoe), in `native/` as a Swift Package. Motivation: answer the "Tauri isn't native" chatter with a real artifact, and evaluate Liquid Glass. Data sources + functionality stay identical to the Tauri app (port, not redesign). Decision in `decisions.md` (2026-05-30 ADR); full task record at `tasks/2026-05/21-native-swift-liquid-glass-rebuild.md`; build loop + source map in `native/README.md`.
+
+### Done + building clean (`./build-app.sh debug`, 0 errors)
+
+- **Dashboard** — feature parity, verified side-by-side vs Tauri (hero strip, Updates list, Composition bar/pie, Top-categories donut, Storage; responsive via `.onGeometryChange`).
+- **Package detail inspector** — stock `.inspector(isPresented:)`, all 14 sections render live (meta, summary, homepage, categories, tags, Security, install-Trend sparkline, use-cases, similar, GitHub stars/forks, caveats, deps).
+- **Settings** — `Settings {}` scene + `SettingsLink`, stock 9-tab `TabView` (Appearance / Network / GitHub / Brew / Updates / Security / Trending / Activity / About), every toggle wired to real systems.
+- **Data layer** — 6 services ported (`BrewService`, `EnrichmentCatalog`, `AppSettings`, `VulnsService`, `GitHubService`, `TrendingHistoryService`) + `LocalPrefs`. `settings.json` shares the Tauri path/schema; `categories.json` + `enrichment.json` bundled (uncompressed). ~4,800 lines of Swift across 14 files.
+
+### Pending
+
+- **Library panel** — row→detail already wired; needs kind pills, sort, filters.
+- **Discover / Trending / Snapshots / Services / Activity** panels (placeholders).
+- **Dashboard GitHub "starred N of M" card** — reachable now Settings sign-in exists; needs a batch resolver.
+- **Sparkle** for real in-app updates (the only genuinely-deferred subsystem; Updates auto-check toggle persists, install is a stub).
+- **Vulns "scan all"** from Settings (`VulnsService` has `scanOne` only today).
+
+### Toolchain + state
+
+- SPM (`swift build`), not an Xcode project. Full Xcode installed but `xcode-select` → CommandLineTools, so `xcodebuild` unavailable; `swift build` links Liquid Glass fine. `native/build-app.sh` wraps the binary into a `.app`.
+- **Stock Apple components only, no overrides** — the recurring lesson of the spike. `swift build` → 0 errors at end of session.
+- **Not committed.** The entire `native/` tree is uncommitted on the branch; no commits past `main`. `main` (Tauri v0.5.0) untouched. Not yet visually verified beyond the panels noted above.

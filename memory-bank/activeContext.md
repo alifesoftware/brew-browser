@@ -1,5 +1,33 @@
 # Active Context
 
+> ## ⚗️ Active branch: `experiment/native-swift-liquid-glass` (2026-05-31)
+>
+> The current working branch is **not** `main`. It's an off-`main` experiment: a
+> faithful **port** of the Tauri interface to native Swift 6 + SwiftUI + Liquid
+> Glass (macOS 26 Tahoe), living in `native/` as a Swift Package. It's a port,
+> not a redesign — data sources + functionality stay identical to the shipped
+> Tauri app. **Entirely uncommitted; no commits past `main`. `main` (Tauri
+> v0.5.0) is untouched** — the rest of this file describes that shipped state and
+> still holds for `main`.
+>
+> **Done + building clean** (`cd native && ./build-app.sh debug`, 0 errors):
+> Dashboard (parity), package detail inspector (all 14 sections live), Settings
+> (9-tab stock `TabView`), data layer (6 services + LocalPrefs ported).
+> **Next:** Library panel (row→detail wired; needs kind pills, sort, filters),
+> then Discover / Trending / Snapshots / Services / Activity. **Deferred:**
+> Sparkle in-app updates; Vulns "scan all".
+>
+> Build loop: edit → `cd native && ./build-app.sh debug` → `killall BrewBrowser;
+> open native/BrewBrowser.app` → user screenshots. Toolchain: SPM only
+> (`xcode-select` → CommandLineTools, no `xcodebuild`). Constraint: **stock Apple
+> components only, no overrides.**
+>
+> See `native/README.md`, `decisions.md` (2026-05-30 ADR),
+> `tasks/2026-05/21-native-swift-liquid-glass-rebuild.md`, and the 2026-05-31
+> entry in `progress.md`.
+
+---
+
 **Date:** 2026-05-30 EOD (v0.5.0 launched big; Homebrew tap live; post-launch fixes shipped)
 **State:** v0.5.0 released and **launched successfully on r/MacOS (Saturday — the only day app posts are allowed there)**. Final launch numbers: **29 → 128 stars in one day**; r/MacOS post 300↑ @ 92.6%, r/MacOSApps post 106↑ @ 97.3% (the predecessor closed-source "Homebrew Store" post that triggered this whole project was deleted by its author at 65%). Post-launch work all landed: issue #8 fix (merged, PR #10), Homebrew tap (live), docs across README/landing/memory-bank (merged, PR #11), landing site redeployed to the server (was stale at v0.3.0, now v0.5.0). First external contributor PR (#15) reviewed.
 
