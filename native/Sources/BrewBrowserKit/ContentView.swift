@@ -22,6 +22,7 @@ public struct ContentView: View {
     public init() {}
 
     public var body: some View {
+      VStack(spacing: 0) {
         NavigationSplitView {
             List(Section.allCases, selection: $model.selection) { section in
                 Label(section.rawValue, systemImage: section.symbol)
@@ -70,8 +71,11 @@ public struct ContentView: View {
                 .searchable(text: $model.globalQuery, placement: .toolbar, prompt: "Search packages")
                 .searchSuggestions {
                     ForEach(model.suggestions) { pkg in
-                        Label(pkg.name, systemImage: "shippingbox")
-                            .searchCompletion(pkg.name)
+                        HStack(spacing: 8) {
+                            PackageIcon(model: model, token: pkg.name, kind: pkg.kind, size: 16)
+                            Text(pkg.name)
+                        }
+                        .searchCompletion(pkg.name)
                     }
                 }
                 .onSubmit(of: .search) {
@@ -114,9 +118,15 @@ public struct ContentView: View {
                     .inspectorColumnWidth(min: 360, ideal: 400, max: 560)
                 }
         }
-        .task {
+        // Activity drawer as a true full-width bottom bar BELOW the whole split
+        // view (sibling, not an inset/overlay) — so the split view + the
+        // inspector's own footer live entirely above it and nothing is covered.
+        ActivityDrawer(model: model)
+      }
+      .task {
+            model.loadJobs()
             if model.installed.isEmpty { await model.loadLibrary() }
-        }
+      }
     }
 
     @ViewBuilder
@@ -128,6 +138,8 @@ public struct ContentView: View {
             LibraryView(model: model)
         case .discover:
             DiscoverView(model: model)
+        case .activity:
+            ActivityView(model: model)
         default:
             PlaceholderView(section: model.selection)
         }
@@ -222,7 +234,10 @@ struct LibraryView: View {
     private var tableWithDescription: some View {
         Table(model.sortedLibraryRows, selection: $selectedID, sortOrder: $model.librarySort) {
             TableColumn("Name", value: \.name) { row in
-                Label(row.name, systemImage: "shippingbox")
+                HStack(spacing: 8) {
+                    PackageIcon(model: model, token: row.name, kind: row.kind)
+                    Text(row.name)
+                }
             }
             .width(min: 140, ideal: 200)
 
@@ -252,7 +267,10 @@ struct LibraryView: View {
     private var tableNoDescription: some View {
         Table(model.sortedLibraryRows, selection: $selectedID, sortOrder: $model.librarySort) {
             TableColumn("Name", value: \.name) { row in
-                Label(row.name, systemImage: "shippingbox")
+                HStack(spacing: 8) {
+                    PackageIcon(model: model, token: row.name, kind: row.kind)
+                    Text(row.name)
+                }
             }
             .width(min: 140, ideal: 240)
 

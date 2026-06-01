@@ -84,6 +84,121 @@ actor BrewService {
         return String(decoding: outData, as: UTF8.self)
     }
 
+    /// One event from a streaming brew run — a line of output, or the terminal
+    /// result. Lets the UI show live progress and surface failures instead of a
+    /// dead spinner.
+    enum StreamEvent: Sendable {
+        case line(String)
+        case finished(exitCode: Int32)
+    }
+
+    /// Thread-safe newline splitter for the pipe read handler. The read +
+    /// termination closures run on arbitrary queues, so the byte buffer lives
+    /// in this locked reference type rather than a captured `var` (Swift 6
+    /// Sendable-capture rules forbid the latter).
+    private final class LineAccumulator: @unchecked Sendable {
+        private let lock = NSLock()
+        private var buffer = Data()
+
+        /// Append a chunk, return any complete lines it produced.
+        func append(_ chunk: Data) -> [String] {
+            lock.lock(); defer { lock.unlock() }
+            buffer.append(chunk)
+            var out: [String] = []
+            while let nl = buffer.firstIndex(of: 0x0a) {
+                let lineData = buffer.subdata(in: buffer.startIndex..<nl)
+                buffer.removeSubrange(buffer.startIndex...nl)
+                out.append(String(decoding: lineData, as: UTF8.self))
+            }
+            return out
+        }
+
+        /// Final partial line (if any) at termination.
+        func flush() -> String? {
+            lock.lock(); defer { lock.unlock() }
+            guard !buffer.isEmpty else { return nil }
+            let s = String(decoding: buffer, as: UTF8.self)
+            buffer.removeAll()
+            return s
+        }
+    }
+
+    /// Live processes keyed by job id, so a running job can be cancelled
+    /// (`cancel(jobId:)` terminates it). Cleared on termination.
+    private var liveProcesses: [UUID: Process] = [:]
+
+    /// Terminate a running job's brew process (SIGTERM). No-op if already gone.
+    func cancel(jobId: UUID) {
+        liveProcesses[jobId]?.terminate()
+    }
+
+    private func register(_ p: Process, for jobId: UUID) { liveProcesses[jobId] = p }
+    private func unregister(_ jobId: UUID) { liveProcesses[jobId] = nil }
+
+    /// Run a brew subcommand and stream stdout+stderr line-by-line, finishing
+    /// with the exit code. Critically, **stdin is /dev/null** — so if brew tries
+    /// to prompt (e.g. a sudo password for a `.pkg` cask) it gets EOF and fails
+    /// fast with a visible error rather than hanging forever on a TTY-less pipe.
+    /// The process is registered under `jobId` so `cancel(jobId:)` can kill it.
+    func runStreaming(jobId: UUID, _ args: [String]) -> AsyncStream<StreamEvent> {
+        AsyncStream { continuation in
+            guard let brew = Self.resolveBrewPath() else {
+                continuation.yield(.line("Error: couldn't find the brew executable."))
+                continuation.yield(.finished(exitCode: 127))
+                continuation.finish()
+                return
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: brew)
+            process.arguments = args
+            process.currentDirectoryURL = URL(fileURLWithPath: "/")
+            // No TTY/stdin: a sudo/interactive prompt gets EOF → brew errors out
+            // visibly instead of blocking on a read that never returns.
+            process.standardInput = FileHandle.nullDevice
+            // Merge stdout+stderr into one pipe so ordering is preserved and we
+            // can't deadlock on one buffer filling while we read the other.
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            // Tell brew not to expect a terminal (disables spinners/color that
+            // would otherwise garble the streamed lines).
+            var env = ProcessInfo.processInfo.environment
+            env["HOMEBREW_NO_COLOR"] = "1"
+            env["HOMEBREW_NO_ENV_HINTS"] = "1"
+            process.environment = env
+
+            let handle = pipe.fileHandleForReading
+            // Shared line buffer across the read + termination closures. A
+            // reference type with its own lock satisfies Swift 6 Sendable
+            // capture rules (a captured `var Data` can't cross the closures).
+            let accumulator = LineAccumulator()
+            handle.readabilityHandler = { fh in
+                let chunk = fh.availableData
+                if chunk.isEmpty { return }
+                for line in accumulator.append(chunk) {
+                    continuation.yield(.line(line))
+                }
+            }
+            process.terminationHandler = { proc in
+                handle.readabilityHandler = nil
+                if let tail = accumulator.flush() {
+                    continuation.yield(.line(tail))
+                }
+                continuation.yield(.finished(exitCode: proc.terminationStatus))
+                continuation.finish()
+                Task { await self.unregister(jobId) }
+            }
+            do {
+                try process.run()
+                Task { await self.register(process, for: jobId) }
+            } catch {
+                continuation.yield(.line("Error launching brew: \(error.localizedDescription)"))
+                continuation.yield(.finished(exitCode: -1))
+                continuation.finish()
+            }
+        }
+    }
+
     /// `brew list --formula --versions` → [InstalledPackage].
     /// Output is one package per line: "name version1 version2 ...".
     /// We take the first version (the linked one) for display, matching the

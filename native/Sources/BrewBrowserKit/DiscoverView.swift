@@ -107,7 +107,7 @@ struct DiscoverView: View {
     @ViewBuilder
     private func iconNameCell(_ row: DiscoverRow) -> some View {
         HStack(spacing: 8) {
-            DiscoverIcon(model: model, row: row)
+            PackageIcon(model: model, token: row.token, kind: row.kind, homepage: row.homepage)
             Text(row.name)
         }
     }
@@ -129,25 +129,32 @@ struct DiscoverView: View {
     }
 }
 
-/// A 20×20 app icon for a Discover row: the resolved cached image when present,
-/// else an SF Symbol. Triggers async resolution on appear (casks only).
-private struct DiscoverIcon: View {
+/// A small app icon for any list row (Discover, Library, …): the resolved
+/// cached image when present, else an SF Symbol. Triggers async resolution on
+/// appear (casks only; formulae are CLI tools → terminal glyph). Shared so every
+/// list shows the same real icons. `homepage` is only needed for the favicon
+/// fallback; installed casks usually resolve via Appcasks token-only, so passing
+/// "" is fine.
+struct PackageIcon: View {
     @Bindable var model: AppModel
-    let row: DiscoverRow
+    let token: String
+    let kind: InstalledPackage.Kind
+    var homepage: String = ""
+    var size: CGFloat = 20
 
     var body: some View {
         Group {
-            if row.kind == .cask, let url = model.iconCache[row.token],
+            if kind == .cask, let url = model.iconCache[token],
                let img = NSImage(contentsOf: url) {
                 Image(nsImage: img).resizable().interpolation(.high)
             } else {
-                Image(systemName: row.kind == .cask ? "app.dashed" : "terminal")
+                Image(systemName: kind == .cask ? "app.dashed" : "terminal")
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 20, height: 20)
-        .task(id: row.token) {
-            await model.resolveIcon(token: row.token, kind: row.kind, homepage: row.homepage)
+        .frame(width: size, height: size)
+        .task(id: token) {
+            await model.resolveIcon(token: token, kind: kind, homepage: homepage)
         }
     }
 }

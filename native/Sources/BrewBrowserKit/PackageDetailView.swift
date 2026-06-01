@@ -18,9 +18,17 @@ struct PackageDetailView: View {
     /// Display title: enriched friendly name when available, else the token.
     private var title: String { enrichment?.friendlyName ?? pkg.name }
 
-    /// Installed = brew reported an installed version. nil (Discover packages
-    /// not on disk) → not installed. Drives the footer's Install/Uninstall.
-    private var isInstalled: Bool { info?.installedVersion != nil }
+    /// Installed = the package is in the live installed list (from `brew list`,
+    /// authoritative + no cache lag) OR brew info reports an installed version.
+    /// `brew info --json` caches metadata, so right after an install it can
+    /// still say installed:null — the installed list reflects reality first, so
+    /// it's the primary signal here. Drives the footer's Install/Uninstall.
+    private var isInstalled: Bool {
+        if model.installed.contains(where: { $0.name == pkg.name && $0.kind == pkg.kind }) {
+            return true
+        }
+        return info?.installedVersion != nil
+    }
 
     var body: some View {
         ScrollView {
@@ -328,14 +336,15 @@ struct PackageDetailView: View {
         HStack {
             if model.actionRunning {
                 ProgressView().controlSize(.small)
-                Text(model.actionLabel ?? "Working…").font(.caption).foregroundStyle(.secondary)
+                Text("Working… (see Activity)").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            // Footer adapts to install state — only once info has loaded, so we
-            // never flash the wrong button. `installedVersion == nil` means not
-            // installed (Discover surfaces these) → Install. Installed →
-            // Uninstall, plus Upgrade when outdated.
-            if info != nil {
+            // Footer adapts to install state, driven by the live installed list
+            // (`isInstalled`) so it's correct even while `brew info` reloads
+            // after an action (info goes nil mid-reload; the list does not).
+            // Show buttons once we have either signal — avoids an empty footer
+            // during the post-install detail refresh.
+            if info != nil || isInstalled {
                 if isInstalled {
                     if info?.isOutdated == true {
                         Button {

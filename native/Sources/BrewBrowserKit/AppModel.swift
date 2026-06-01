@@ -278,9 +278,17 @@ final class AppModel {
     var detailCategories: [String] = []        // category labels for this package
     var detailLoading = false
     var detailError: String?
-    /// Streaming action state (upgrade/uninstall/install) for the footer.
-    var actionRunning = false
-    var actionLabel: String?
+    /// True while any package action (install/upgrade/uninstall) is running —
+    /// the footer disables its buttons. Live output goes to the Activity drawer.
+    var actionRunning: Bool { jobs.contains { $0.status == .running } }
+
+    // ---- Activity (streaming jobs + bottom drawer) ----
+    /// All jobs, newest first; running + completed. Persisted (cap 50).
+    var jobs: [ActivityJob] = []
+    /// The job shown in the drawer console.
+    var activeJobId: UUID?
+    /// Whether the bottom Activity drawer is expanded.
+    var drawerOpen = false
 
     // ---- Vulnerabilities (Security card) ----
     var detailVulns: [VulnFinding] = []
@@ -373,6 +381,9 @@ final class AppModel {
         switch section {
         case .library:  return outdatedCount > 0 ? outdatedCount : nil
         case .services: return runningServices > 0 ? runningServices : nil
+        case .activity:
+            let running = jobs.filter { $0.status == .running }.count
+            return running > 0 ? running : nil
         default:        return nil
         }
     }
@@ -538,35 +549,124 @@ final class AppModel {
 
     func upgradeDetail() async {
         guard let pkg = detailPackage else { return }
-        await runAction("Upgrading \(pkg.name)") { try await self.brew.upgrade(pkg.name) }
+        var args = ["upgrade"]
+        if pkg.kind == .cask { args.append("--cask") }
+        args.append(pkg.name)
+        await startJob("Upgrading \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
+        if let pkg = detailPackage { await loadDetail(pkg) }
     }
 
     func uninstallDetail() async {
         guard let pkg = detailPackage else { return }
-        await runAction("Uninstalling \(pkg.name)") {
-            try await self.brew.uninstall(pkg.name, kind: pkg.kind)
-        }
-        closeDetail()
+        var args = ["uninstall"]
+        if pkg.kind == .cask { args.append("--cask") }
+        args.append(pkg.name)
+        let ok = await startJob("Uninstalling \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
+        if ok { closeDetail() } else if let pkg = detailPackage { await loadDetail(pkg) }
     }
 
     /// Install the detail package (Discover → uninstalled packages). Reloads
-    /// detail afterward so the footer flips Install → Uninstall + the meta
-    /// table shows the now-installed version.
+    /// detail afterward so the footer flips Install → Uninstall + the meta table
+    /// shows the now-installed version. Output streams into the Activity drawer;
+    /// on failure the job shows `failed` with brew's actual error lines.
     func installDetail() async {
         guard let pkg = detailPackage else { return }
-        await runAction("Installing \(pkg.name)") {
-            try await self.brew.install(pkg.name, kind: pkg.kind)
-        }
-        await loadDetail(pkg)
+        var args = ["install"]
+        if pkg.kind == .cask { args.append("--cask") }
+        args.append(pkg.name)
+        await startJob("Installing \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
+        if let pkg = detailPackage { await loadDetail(pkg) }
     }
 
-    private func runAction(_ label: String, _ work: @escaping () async throws -> Void) async {
-        actionRunning = true
-        actionLabel = label
-        do { try await work() } catch { detailError = error.localizedDescription }
-        actionRunning = false
-        actionLabel = nil
-        // Refresh installed/outdated state after a mutation.
+    /// Run a mutating brew command as an Activity job: creates a running job,
+    /// opens the drawer, streams output into the job's lines live, then sets the
+    /// terminal status + exit. Returns true on success. stdin is /dev/null in
+    /// the service, so a sudo/.pkg prompt fails fast (visible in the drawer)
+    /// instead of hanging. `label` actually drives display label too.
+    @discardableResult
+    private func startJob(_ label: String, args: [String], startedAt: Double) async -> Bool {
+        let jobId = UUID()
+        let job = ActivityJob(
+            id: jobId, label: label,
+            command: "brew " + args.joined(separator: " "),
+            startedAt: startedAt, status: .running, lines: [],
+            exitCode: nil, durationMs: nil
+        )
+        jobs.insert(job, at: 0)
+        if jobs.count > Self.maxJobs { jobs.removeLast(jobs.count - Self.maxJobs) }
+        activeJobId = jobId
+        drawerOpen = true
+
+        var exit: Int32 = 0
+        let stream = await brew.runStreaming(jobId: jobId, args)
+        for await event in stream {
+            guard let idx = jobs.firstIndex(where: { $0.id == jobId }) else { continue }
+            switch event {
+            case .line(let l):
+                jobs[idx].lines.append(ActivityLine(stream: .stdout, text: l))
+                if jobs[idx].lines.count > Self.maxLinesPerJob {
+                    jobs[idx].lines.removeFirst(jobs[idx].lines.count - Self.maxLinesPerJob)
+                }
+            case .finished(let code):
+                exit = code
+            }
+        }
+
+        let ok = exit == 0
+        if let idx = jobs.firstIndex(where: { $0.id == jobId }) {
+            // exit 130/143 = SIGINT/SIGTERM → treat as canceled.
+            jobs[idx].status = ok ? .succeeded : (exit == 130 || exit == 143 ? .canceled : .failed)
+            jobs[idx].exitCode = exit
+        }
+        persistJobs()
         await refresh()
+        return ok
+    }
+
+    /// Cancel a running job (SIGTERM its brew process).
+    func cancelJob(_ jobId: UUID) {
+        Task { await brew.cancel(jobId: jobId) }
+    }
+
+    /// Close the drawer — clears the active job so the bottom bar hides. The job
+    /// stays in Activity history; selecting it there reopens the drawer.
+    func dismissDrawer() {
+        activeJobId = nil
+        drawerOpen = false
+    }
+
+    /// Clear completed jobs from the history (keeps running ones).
+    func clearFinishedJobs() {
+        jobs.removeAll { $0.status != .running }
+        persistJobs()
+        if let active = activeJobId, !jobs.contains(where: { $0.id == active }) {
+            activeJobId = jobs.first?.id
+        }
+    }
+
+    // MARK: - Activity persistence (UserDefaults; mirrors Tauri's localStorage)
+
+    private static let maxJobs = 50
+    private static let maxLinesPerJob = 500
+    private static let jobsKey = "activity.jobs.v1"
+
+    /// Persist completed jobs (running ones are dropped on next launch). Best-
+    /// effort; failure just means history doesn't survive restart.
+    private func persistJobs() {
+        let finished = jobs.filter { $0.status != .running }.prefix(Self.maxJobs)
+        guard let data = try? JSONEncoder().encode(Array(finished)) else { return }
+        UserDefaults.standard.set(data, forKey: Self.jobsKey)
+    }
+
+    /// Load persisted job history at launch. Any "running" survivor (app quit
+    /// mid-job) is marked canceled — we can't reattach to a dead process.
+    func loadJobs() {
+        guard let data = UserDefaults.standard.data(forKey: Self.jobsKey),
+              let saved = try? JSONDecoder().decode([ActivityJob].self, from: data) else { return }
+        jobs = saved.map { j in
+            var j = j
+            if j.status == .running { j.status = .canceled }
+            return j
+        }
     }
 }
