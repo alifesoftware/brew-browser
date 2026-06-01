@@ -153,14 +153,14 @@ struct UpdatesCard: View {
 
                 ForEach(model.outdatedPreview) { p in
                     Button {
-                        model.openDetail(InstalledPackage(name: p.name, version: p.installedVersion, kind: .formula))
+                        model.openDetail(InstalledPackage(name: p.name, version: p.installedVersion, kind: p.kind))
                     } label: {
                         HStack(spacing: 10) {
                             // Name column — flexible, takes remaining space.
                             Text(p.name)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             // Kind column — fixed width so pills align vertically.
-                            KindPill(kind: .formula)
+                            KindPill(kind: p.kind)
                                 .frame(width: 84, alignment: .leading)
                             // Version column — fixed width, right-aligned.
                             Text("\(p.installedVersion) → \(p.currentVersion)")

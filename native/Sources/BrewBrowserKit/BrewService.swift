@@ -23,6 +23,9 @@ struct OutdatedPackage: Identifiable, Hashable, Sendable {
     let name: String
     let installedVersion: String
     let currentVersion: String
+    /// formula vs cask — taken from the `brew outdated --json=v2` array the row
+    /// came from, so the Dashboard pill + detail open use the right kind.
+    let kind: InstalledPackage.Kind
 }
 
 enum BrewError: Error, LocalizedError {
@@ -186,7 +189,7 @@ actor BrewService {
         else { return [] }
 
         var out: [OutdatedPackage] = []
-        for key in ["formulae", "casks"] {
+        for (key, kind): (String, InstalledPackage.Kind) in [("formulae", .formula), ("casks", .cask)] {
             guard let arr = root[key] as? [[String: Any]] else { continue }
             for item in arr {
                 guard let name = item["name"] as? String else { continue }
@@ -194,7 +197,7 @@ actor BrewService {
                     ?? (item["installed_versions"] as? [Any])?.first as? String
                     ?? "?"
                 let current = item["current_version"] as? String ?? "?"
-                out.append(OutdatedPackage(name: name, installedVersion: installed, currentVersion: current))
+                out.append(OutdatedPackage(name: name, installedVersion: installed, currentVersion: current, kind: kind))
             }
         }
         return out.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

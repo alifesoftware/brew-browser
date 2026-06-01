@@ -237,9 +237,9 @@ final class AppModel {
             InstalledPackage(name: "iterm2", version: "3.5.2", kind: .cask),
         ]
         m.outdated = [
-            OutdatedPackage(name: "ripgrep", installedVersion: "14.1.0", currentVersion: "14.1.1"),
-            OutdatedPackage(name: "node", installedVersion: "22.3.0", currentVersion: "22.4.0"),
-            OutdatedPackage(name: "visual-studio-code", installedVersion: "1.90.0", currentVersion: "1.91.0"),
+            OutdatedPackage(name: "ripgrep", installedVersion: "14.1.0", currentVersion: "14.1.1", kind: .formula),
+            OutdatedPackage(name: "node", installedVersion: "22.3.0", currentVersion: "22.4.0", kind: .formula),
+            OutdatedPackage(name: "visual-studio-code", installedVersion: "1.90.0", currentVersion: "1.91.0", kind: .cask),
         ]
         m.formulaCount = m.installed.lazy.filter { $0.kind == .formula }.count
         m.caskCount = m.installed.lazy.filter { $0.kind == .cask }.count
