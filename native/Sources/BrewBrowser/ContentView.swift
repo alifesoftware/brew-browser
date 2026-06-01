@@ -273,6 +273,13 @@ struct LibraryView: View {
     }
 }
 
+#if DEBUG
+#Preview("Library") {
+    LibraryView(model: .preview())
+        .frame(width: 820, height: 560)
+}
+#endif
+
 struct PlaceholderView: View {
     let section: Section
 

@@ -217,6 +217,55 @@ final class AppModel {
 
     init() {}
 
+#if DEBUG
+    /// A model pre-populated with representative data for SwiftUI `#Preview`s
+    /// and Xcode's `RenderPreview`. No `brew` subprocess, no network — pure
+    /// fixtures, so previews render the layout/chrome without a live install.
+    /// Data-driven behavior against the real install is still verified by
+    /// launching the app; previews are for layout iteration only.
+    static func preview() -> AppModel {
+        let m = AppModel()
+        m.installed = [
+            InstalledPackage(name: "wget", version: "1.24.5", kind: .formula),
+            InstalledPackage(name: "ripgrep", version: "14.1.0", kind: .formula),
+            InstalledPackage(name: "fd", version: "10.2.0", kind: .formula),
+            InstalledPackage(name: "jq", version: "1.7.1", kind: .formula),
+            InstalledPackage(name: "git", version: "2.45.2", kind: .formula),
+            InstalledPackage(name: "node", version: "22.3.0", kind: .formula),
+            InstalledPackage(name: "visual-studio-code", version: "1.90.0", kind: .cask),
+            InstalledPackage(name: "rectangle", version: "0.84", kind: .cask),
+            InstalledPackage(name: "iterm2", version: "3.5.2", kind: .cask),
+        ]
+        m.outdated = [
+            OutdatedPackage(name: "ripgrep", installedVersion: "14.1.0", currentVersion: "14.1.1"),
+            OutdatedPackage(name: "node", installedVersion: "22.3.0", currentVersion: "22.4.0"),
+            OutdatedPackage(name: "visual-studio-code", installedVersion: "1.90.0", currentVersion: "1.91.0"),
+        ]
+        m.formulaCount = m.installed.lazy.filter { $0.kind == .formula }.count
+        m.caskCount = m.installed.lazy.filter { $0.kind == .cask }.count
+        m.outdatedCount = m.outdated.count
+        m.leavesCount = 4
+        m.onRequestCount = 5
+        m.pinnedCount = 1
+        m.runningServices = 2
+        m.brewVersion = "5.1.14"
+        m.brewPrefix = "/opt/homebrew"
+        m.categories = [
+            CategoryBreakdown(slug: "developer-tools", label: "Developer Tools", count: 5, fraction: 0.56),
+            CategoryBreakdown(slug: "productivity", label: "Productivity", count: 2, fraction: 0.22),
+            CategoryBreakdown(slug: "terminal", label: "Terminal", count: 2, fraction: 0.22),
+        ]
+        m.storage = [
+            StorageItem(label: "Formulae (Cellar)", path: "/opt/homebrew/Cellar", bytes: 11_180_000_000),
+            StorageItem(label: "Casks (Caskroom)", path: "/opt/homebrew/Caskroom", bytes: 7_350_000_000),
+            StorageItem(label: "Logs (var/log)", path: "/opt/homebrew/var/log", bytes: 5_870_000_000),
+            StorageItem(label: "Download cache", path: "~/Library/Caches/Homebrew", bytes: 17_700_000_000),
+        ]
+        m.dashboardLoaded = true
+        return m
+    }
+#endif
+
     /// Count badge for a sidebar section (nil = no badge). Library shows the
     /// outdated count; Services shows running services.
     func badge(for section: Section) -> Int? {

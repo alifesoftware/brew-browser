@@ -441,3 +441,10 @@ struct StorageCard: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("Dashboard") {
+    DashboardView(model: .preview())
+        .frame(width: 980, height: 800)
+}
+#endif
