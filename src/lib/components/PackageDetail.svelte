@@ -11,6 +11,7 @@
 
   import Pill from "./Pill.svelte";
   import Button from "./Button.svelte";
+  import PackageRowIcon from "./PackageRowIcon.svelte";
   import DestructiveConfirm from "./DestructiveConfirm.svelte";
   import InfoButton from "./InfoButton.svelte";
   import LoadingState from "./LoadingState.svelte";
@@ -878,6 +879,19 @@
           <Button variant="secondary" onclick={() => ui.selectedPackage && loadDetail(ui.selectedPackage.name, ui.selectedPackage.kind)}>Retry</Button>
         </div>
       {:else if detail && pkg}
+        <!-- Centered app-icon identity anchor (matches native's DetailIcon):
+             the resolved cask icon at 64px, or a kind glyph for formulae /
+             unresolved casks. Provenance still lives in the "Icon source"
+             meta row below. -->
+        <div class="detail-icon">
+          <PackageRowIcon
+            token={pkg.name}
+            kind={pkg.kind}
+            iconSource={pkg.iconSource}
+            homepage={pkg.homepage}
+            size={64}
+          />
+        </div>
         <dl class="meta">
           {#if enriched?.friendlyName}
             <!-- AI is on AND enrichment has a friendlyName, so the h1
@@ -1524,6 +1538,13 @@
 
   .close { color: var(--color-text-muted); padding: 4px; border-radius: var(--radius-sm); }
   .close:hover { background: var(--color-surface-sunken); color: var(--color-text-primary); }
+
+  /* Centered app-icon anchor at the top of the detail body. */
+  .detail-icon {
+    display: flex;
+    justify-content: center;
+    padding: var(--space-2) 0 var(--space-4);
+  }
 
   .body {
     padding: var(--space-4);

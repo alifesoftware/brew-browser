@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-06-02 — Tauri←native parity (branch `tauri-parity`)
+
+- ✅ Shared `PackageRowIcon.svelte` (Tauri analog of native `PackageIcon`); list icons added to Discover + Trending (had none), Library routed through it.
+- ✅ Detail panel: centered 64px app icon.
+- ✅ Dashboard: Composition pie + Top-categories side-by-side on wide panes; chips in card header; equal-height cards; charts matched to native specs (outer radius 60, donut inner ratio 0.6, filled `<path>` pie, vertical centering).
+- ✅ Keychain: one batched `SecItemCopyMatching` (one prompt) via `security-framework`, mirroring native `keychainReadAll`.
+- ✅ Trending velocity badge: canonical banded threshold (≥1.5 🔥 / ≤0.7 ❄️ / neutral).
+- ✅ `npm run check` 0 errors; Rust compiles; verified via screenshots. Committed + pushed.
+- ↩️ Reverse-parity (native←Tauri) tracked in memory `project-native-reverse-parity`: legend icons, banded velocity, Snapshots/Services panels.
+
+See `tasks/2026-06/01-tauri-native-parity.md` + `decisions.md#2026-06-02`.
+
 ## 2026-05-24 (overnight)
 
 ### Done since last sync

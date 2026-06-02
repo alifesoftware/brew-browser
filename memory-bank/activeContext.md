@@ -1,5 +1,10 @@
 # Active Context
 
+**Date:** 2026-06-02 (Tauri←native parity pass on branch `tauri-parity`)
+**State:** Working on `tauri-parity` (rooted on `main`) — bringing the shipped Tauri app up to the native rebuild's icon + Dashboard-chart treatment, one-prompt Keychain, and the canonical Trending velocity threshold. Parity pass complete + verified (`npm run check` clean, Rust compiles, screenshots confirmed); committed + pushed. Full detail: `tasks/2026-06/01-tauri-native-parity.md`; ADR: `decisions.md#2026-06-02`. Reverse-parity backlog (native←Tauri) in memory `project-native-reverse-parity`. Prior context (v0.5.0 launch) below.
+
+---
+
 **Date:** 2026-05-30 EOD (v0.5.0 launched big; Homebrew tap live; post-launch fixes shipped)
 **State:** v0.5.0 released and **launched successfully on r/MacOS (Saturday — the only day app posts are allowed there)**. Final launch numbers: **29 → 128 stars in one day**; r/MacOS post 300↑ @ 92.6%, r/MacOSApps post 106↑ @ 97.3% (the predecessor closed-source "Homebrew Store" post that triggered this whole project was deleted by its author at 65%). Post-launch work all landed: issue #8 fix (merged, PR #10), Homebrew tap (live), docs across README/landing/memory-bank (merged, PR #11), landing site redeployed to the server (was stale at v0.3.0, now v0.5.0). First external contributor PR (#15) reviewed.
 
