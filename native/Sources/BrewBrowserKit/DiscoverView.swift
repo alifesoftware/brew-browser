@@ -108,7 +108,12 @@ struct DiscoverView: View {
     private func iconNameCell(_ row: DiscoverRow) -> some View {
         HStack(spacing: 8) {
             PackageIcon(model: model, token: row.token, kind: row.kind, homepage: row.homepage)
-            Text(row.name)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.token)
+                if !row.friendlyName.isEmpty {
+                    Text(row.friendlyName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
         }
     }
 

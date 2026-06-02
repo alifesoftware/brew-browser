@@ -46,6 +46,9 @@ enum LibraryFilter: String, CaseIterable, Identifiable, Hashable {
 struct LibraryRow: Identifiable, Hashable, Sendable {
     var id: String { name }
     let name: String
+    /// AI friendly name (dimmed subtitle under the token), when AI features on
+    /// and it differs from the token. Empty otherwise. Matches Tauri PackageRow.
+    let friendlyName: String
     let version: String
     let kind: InstalledPackage.Kind
     let isOutdated: Bool
@@ -62,12 +65,42 @@ struct DiscoverRow: Identifiable, Hashable, Sendable {
     var id: String { "\(kind.rawValue):\(token)" }
     let token: String
     let name: String
+    /// AI friendly name (dimmed subtitle), when AI on + differs from token.
+    let friendlyName: String
     let version: String
     let kind: InstalledPackage.Kind
     let homepage: String
     let summary: String
     let isInstalled: Bool
 
+    var installedRank: Int { isInstalled ? 1 : 0 }
+}
+
+/// A Trending table row — a leaderboard entry joined with catalog desc/version,
+/// install state, and (when Enhanced Trending is on) velocity + sparkline.
+struct TrendingRow: Identifiable, Hashable, Sendable {
+    var id: String { "\(kind.rawValue):\(token)" }
+    let rank: Int
+    let token: String
+    let name: String
+    /// AI friendly name (dimmed subtitle), when AI on + differs from token.
+    /// Empty otherwise. Same source as Library/Discover (matches Tauri).
+    let friendlyName: String
+    let version: String
+    let kind: InstalledPackage.Kind
+    let homepage: String
+    let summary: String
+    let installCount: Int
+    let isInstalled: Bool
+    /// Velocity index (enhanced layer); nil when Enhanced Trending is off or
+    /// the package isn't in the history index.
+    let velocity: Double?
+    /// Inline sparkline points (enhanced layer); empty when off/absent.
+    let sparkline: [Double]
+
+    /// Comparable proxy so velocity sorts with no-velocity rows pinned low.
+    var velocityRank: Double { velocity ?? -Double.greatestFiniteMagnitude }
+    /// Comparable proxy for the Installed column (`Bool` isn't `Comparable`).
     var installedRank: Int { isInstalled ? 1 : 0 }
 }
 
@@ -117,12 +150,15 @@ final class AppModel {
             case .outdated: guard outdatedSet.contains(pkg.name) else { return nil }
             }
             if !q.isEmpty, !pkg.name.localizedCaseInsensitiveContains(q) { return nil }
+            let entry = showSummary ? enrichment?.entry(for: pkg.name) : nil
+            let friendly = entry?.friendlyName ?? ""
             return LibraryRow(
                 name: pkg.name,
+                friendlyName: (friendly != pkg.name) ? friendly : "",
                 version: pkg.version,
                 kind: pkg.kind,
                 isOutdated: outdatedSet.contains(pkg.name),
-                summary: showSummary ? (enrichment?.entry(for: pkg.name)?.summary ?? "") : ""
+                summary: showSummary ? (entry?.summary ?? "") : ""
             )
         }
     }
@@ -177,13 +213,16 @@ final class AppModel {
                !pkg.displayName.localizedCaseInsensitiveContains(q) {
                 return nil
             }
+            let entry = showSummary ? enrichment?.entry(for: pkg.token) : nil
+            let friendly = entry?.friendlyName ?? ""
             return DiscoverRow(
                 token: pkg.token,
                 name: pkg.displayName,
+                friendlyName: (friendly != pkg.token) ? friendly : "",
                 version: pkg.version,
                 kind: pkg.kind,
                 homepage: pkg.homepage,
-                summary: showSummary ? (enrichment?.entry(for: pkg.token)?.summary ?? pkg.desc) : pkg.desc,
+                summary: showSummary ? (entry?.summary ?? pkg.desc) : pkg.desc,
                 isInstalled: installedIDs.contains("\(pkg.kind.rawValue):\(pkg.token)")
             )
         }
@@ -196,7 +235,108 @@ final class AppModel {
         guard catalog.isEmpty, !catalogLoading else { return }
         catalogLoading = true
         catalog = await catalogService.all()
+        // Build the token→package index here (at load time), NOT lazily inside
+        // the `trendingRows` computed property — mutating @Observable state
+        // during view-body evaluation is unreliable and was leaving Trending
+        // descriptions/versions blank.
+        var byID: [String: CatalogPackage] = [:]
+        byID.reserveCapacity(catalog.count)
+        for p in catalog { byID[p.id] = p }
+        catalogByID = byID
         catalogLoading = false
+    }
+
+    /// token+kind → catalog package, for joining desc/version/homepage onto
+    /// token+kind → catalog package, for joining desc/version/homepage onto
+    /// Trending rows. Populated by `loadCatalog` (not lazily during render).
+    private var catalogByID: [String: CatalogPackage] = [:]
+    private func catalogLookup(_ token: String, _ kind: InstalledPackage.Kind) -> CatalogPackage? {
+        catalogByID["\(kind.rawValue):\(token)"]
+    }
+
+    // ---- Trending (install leaderboard + computed velocity + opt-in sparkline) ----
+    var trendingWindow: TrendingWindow = .d30
+    var trendingEntries: [TrendingEntry] = []
+    var trendingLoading = false
+    /// Sparkline overlay (opt-in Enhanced Trending only): token+kind → points
+    /// from the zerologic history index. Velocity itself is NOT from here — it's
+    /// computed from the 3 analytics windows (matching Tauri); this index only
+    /// supplies the inline sparkline shape.
+    private var sparklineIndex: [String: [Double]] = [:]
+    /// Default sort = Velocity desc — "trending" should lead with what's
+    /// surging, not just most-installed (matches the Tauri v0.4.0 default).
+    /// Velocity is computed from the analytics windows, so it's always present.
+    var trendingSort: [KeyPathComparator<TrendingRow>] = [
+        KeyPathComparator(\TrendingRow.velocityRank, order: .reverse)
+    ]
+
+    var trendingRows: [TrendingRow] {
+        guard !trendingEntries.isEmpty else { return [] }
+        let installedIDs = Set(installed.map { "\($0.kind.rawValue):\($0.name)" })
+        let showSummary = settings.aiFeaturesVisible
+        return trendingEntries.map { e in
+            let cat = catalogLookup(e.token, e.kind)
+            let id = "\(e.kind.rawValue):\(e.token)"
+            let entry = showSummary ? enrichment?.entry(for: e.token) : nil
+            let friendly = entry?.friendlyName ?? ""
+            return TrendingRow(
+                rank: e.rank,
+                token: e.token,
+                name: cat?.displayName ?? e.token,
+                friendlyName: (friendly != e.token) ? friendly : "",
+                version: cat?.version ?? "—",
+                kind: e.kind,
+                homepage: cat?.homepage ?? "",
+                summary: showSummary ? (entry?.summary ?? cat?.desc ?? "")
+                                     : (cat?.desc ?? ""),
+                installCount: e.installCount,
+                isInstalled: installedIDs.contains(id),
+                velocity: e.velocity,                 // computed from analytics windows
+                sparkline: sparklineIndex[id] ?? []   // opt-in enhanced overlay
+            )
+        }
+    }
+
+    var sortedTrendingRows: [TrendingRow] { trendingRows.sorted(using: trendingSort) }
+
+    /// Inline sparklines need the opt-in Enhanced Trending endpoint. Velocity
+    /// (the column) is always computed from analytics, so it shows regardless.
+    var enhancedTrendingOn: Bool { settings.enhancedTrendingAllowed }
+
+    /// Epoch seconds of the last successful trending fetch (for the "Updated Ns
+    /// ago" label). nil until the first load.
+    var trendingFetchedAt: Double?
+
+    /// Load the install leaderboard (with computed velocity) for the window.
+    /// Pulls the opt-in sparkline overlay too when Enhanced Trending is on.
+    /// `force` bypasses the 60-min cache (Refresh button / ⌘R).
+    func loadTrending(force: Bool = false) async {
+        if catalog.isEmpty { await loadCatalog() }
+        trendingLoading = trendingEntries.isEmpty || force
+        let now = Date().timeIntervalSince1970
+        trendingEntries = await trendingService.leaderboard(window: trendingWindow, now: now, force: force)
+        trendingFetchedAt = now
+        trendingLoading = false
+        // Opt-in sparkline overlay only (velocity already computed above).
+        if enhancedTrendingOn, sparklineIndex.isEmpty || force {
+            let idx = await trendingHistory.index()
+            var map: [String: [Double]] = [:]
+            for e in idx {
+                let kind = e.kind == "cask" ? "cask" : "formula"
+                map["\(kind):\(e.name)"] = e.sparkline
+            }
+            sparklineIndex = map
+        }
+    }
+
+    /// Force-refresh trending (Refresh button / ⌘R) — bypasses the cache.
+    func refreshTrending() async { await loadTrending(force: true) }
+
+    /// Switch the trending window and reload.
+    func setTrendingWindow(_ w: TrendingWindow) async {
+        guard w != trendingWindow else { return }
+        trendingWindow = w
+        await loadTrending()
     }
 
     /// Whether cask icon fetching is allowed right now — Offline Mode off AND the
@@ -302,6 +442,7 @@ final class AppModel {
     // ---- GitHub ----
     var detailRepoStats: RepoStats?
     var detailStarred: Bool?
+    var detailWatching: Bool?
     var githubStatus: GithubStatus?
 
     private let categoryCatalog = CategoryCatalog.loadBundled()
@@ -314,6 +455,7 @@ final class AppModel {
     let settings = AppSettings.shared
     private let vulns = VulnsService()
     private let trendingHistory = TrendingHistoryService()
+    private let trendingService = TrendingService()
     private let githubService = GitHubService()
 
     init() {}
@@ -370,6 +512,13 @@ final class AppModel {
             CatalogPackage(token: "iterm2", displayName: "iTerm2", desc: "Terminal emulator", homepage: "https://iterm2.com/", version: "3.5.2", kind: .cask),
             CatalogPackage(token: "slack", displayName: "Slack", desc: "Team communication and collaboration", homepage: "https://slack.com/", version: "4.39.0", kind: .cask),
             CatalogPackage(token: "visual-studio-code", displayName: "Visual Studio Code", desc: "Code editor", homepage: "https://code.visualstudio.com/", version: "1.90.0", kind: .cask),
+        ]
+        m.trendingEntries = [
+            TrendingEntry(rank: 1, token: "wget", kind: .formula, installCount: 511_288, velocity: 1.02),
+            TrendingEntry(rank: 2, token: "ripgrep", kind: .formula, installCount: 402_113, velocity: 1.41),
+            TrendingEntry(rank: 3, token: "visual-studio-code", kind: .cask, installCount: 221_669, velocity: 0.88),
+            TrendingEntry(rank: 4, token: "neovim", kind: .formula, installCount: 188_402, velocity: 2.10),
+            TrendingEntry(rank: 5, token: "slack", kind: .cask, installCount: 96_770, velocity: nil),
         ]
         return m
     }
@@ -471,6 +620,7 @@ final class AppModel {
         detailTrend = nil
         detailRepoStats = nil
         detailStarred = nil
+        detailWatching = nil
         detailError = nil
     }
 
@@ -485,6 +635,7 @@ final class AppModel {
         detailTrend = nil
         detailRepoStats = nil
         detailStarred = nil
+        detailWatching = nil
 
         // Bundled, synchronous-ish lookups first (instant).
         detailEnrichment = settings.aiFeaturesVisible ? enrichment?.entry(for: pkg.name) : nil
@@ -505,7 +656,7 @@ final class AppModel {
         if settings.enhancedTrendingAllowed {
             Task { await loadTrend(pkg) }
         }
-        if settings.githubAllowed, let hp = detailInfo?.homepage {
+        if settings.githubAllowed, let hp = detailInfo?.githubHomepage {
             Task { await loadGitHub(homepage: hp, pkgId: pkg.id) }
         }
         // Probe brew-vulns availability so the Security card shows the right CTA.
@@ -527,12 +678,71 @@ final class AppModel {
         guard detailPackage?.id == pkgId else { return }
         detailRepoStats = stats
         let status = await githubService.status()
+        githubStatus = status
         if status.signedIn {
             let starred = try? await githubService.isStarred(homepage: homepage)
             guard detailPackage?.id == pkgId else { return }
             detailStarred = starred
         }
     }
+
+    // MARK: - GitHub actions (star / watch / file issue) + sign-in
+
+    var githubSignedIn: Bool { githubStatus?.signedIn ?? false }
+    /// Active device-flow prompt — drives the sign-in sheet. nil = not signing in.
+    var deviceFlow: DeviceFlowStart?
+    var githubSignInError: String?
+
+    /// Star/unstar the detail repo. If signed out, kicks off sign-in first
+    /// (the action re-runs after auth completes — mirrors Tauri's intercept).
+    func toggleStar() async {
+        guard let hp = detailInfo?.githubHomepage else { return }
+        guard await ensureGitHubSignIn() else { return }
+        let target = !(detailStarred ?? false)
+        try? await githubService.setStar(homepage: hp, starred: target)
+        detailStarred = target
+    }
+
+    func toggleWatch() async {
+        guard let hp = detailInfo?.githubHomepage else { return }
+        guard await ensureGitHubSignIn() else { return }
+        let target = !(detailWatching ?? false)
+        try? await githubService.setWatch(homepage: hp, watching: target)
+        detailWatching = target
+    }
+
+    func fileIssue(title: String, body: String) async -> String? {
+        guard let hp = detailInfo?.githubHomepage else { return nil }
+        guard await ensureGitHubSignIn() else { return nil }
+        let result = try? await githubService.createIssue(homepage: hp, title: title, body: body, labels: [])
+        return result?.url
+    }
+
+    /// True if signed in (already, or after completing the device flow). When
+    /// signed out, surfaces `deviceFlow` for the sign-in sheet and polls to
+    /// completion. The caller's action proceeds only on a true return.
+    private func ensureGitHubSignIn() async -> Bool {
+        if githubSignedIn { return true }
+        githubSignInError = nil
+        do {
+            let flow = try await githubService.startDeviceFlow()
+            deviceFlow = flow
+            // Open GitHub's verification page + copy the code (Tauri parity).
+            if let url = URL(string: flow.verificationUri) { NSWorkspace.shared.open(url) }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(flow.userCode, forType: .string)
+            let status = try await githubService.pollDeviceFlow(deviceCode: flow.deviceCode, interval: flow.interval)
+            deviceFlow = nil
+            githubStatus = status
+            return status.signedIn
+        } catch {
+            githubSignInError = error.localizedDescription
+            deviceFlow = nil
+            return false
+        }
+    }
+
+    func cancelGitHubSignIn() { deviceFlow = nil }
 
     /// Run a `brew vulns` scan for the detail package (Security card "Check now").
     func scanDetailVulns() async {

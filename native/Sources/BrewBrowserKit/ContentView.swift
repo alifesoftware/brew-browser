@@ -138,6 +138,8 @@ public struct ContentView: View {
             LibraryView(model: model)
         case .discover:
             DiscoverView(model: model)
+        case .trending:
+            TrendingView(model: model)
         case .activity:
             ActivityView(model: model)
         default:
@@ -236,7 +238,12 @@ struct LibraryView: View {
             TableColumn("Name", value: \.name) { row in
                 HStack(spacing: 8) {
                     PackageIcon(model: model, token: row.name, kind: row.kind)
-                    Text(row.name)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.name)
+                        if !row.friendlyName.isEmpty {
+                            Text(row.friendlyName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
                 }
             }
             .width(min: 140, ideal: 200)
@@ -269,7 +276,12 @@ struct LibraryView: View {
             TableColumn("Name", value: \.name) { row in
                 HStack(spacing: 8) {
                     PackageIcon(model: model, token: row.name, kind: row.kind)
-                    Text(row.name)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.name)
+                        if !row.friendlyName.isEmpty {
+                            Text(row.friendlyName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
                 }
             }
             .width(min: 140, ideal: 240)

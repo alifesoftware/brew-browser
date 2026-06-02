@@ -349,6 +349,19 @@ public actor GitHubService {
     ///
     /// Uses the stored token when present to lift the rate budget
     /// (60 → 5000/hr); anonymous otherwise (`stats.rs:19-23`).
+    /// First candidate that parses as a `github.com/<owner>/<repo>` URL,
+    /// canonicalized to `https://github.com/owner/repo`. Mirrors the Tauri
+    /// `resolve_github_homepage` cascade (task #17) — packages often have a
+    /// non-GitHub homepage but a GitHub-hosted source URL.
+    public static func resolveGithubURL(_ candidates: [String?]) -> String? {
+        for case let c? in candidates {
+            if let repo = parseGithubURL(c) {
+                return "https://github.com/\(repo.owner)/\(repo.repo)"
+            }
+        }
+        return nil
+    }
+
     public func repoStats(homepage: String) async throws -> RepoStats? {
         guard let repo = Self.parseGithubURL(homepage) else { return nil }
         let token = Self.keychainRead(account: Self.accountToken)

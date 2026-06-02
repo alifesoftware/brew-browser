@@ -11,6 +11,9 @@ struct PackageDetailView: View {
     let pkg: InstalledPackage
 
     @State private var confirmUninstall = false
+    @State private var showIssueSheet = false
+    @State private var issueTitle = ""
+    @State private var issueBody = ""
 
     private var info: PackageInfo? { model.detailInfo }
     private var enrichment: EnrichmentEntry? { model.detailEnrichment }
@@ -101,6 +104,64 @@ struct PackageDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .safeAreaInset(edge: .bottom) { footer }
+        // Device-flow sign-in sheet — shown while authorizing with GitHub.
+        .sheet(isPresented: Binding(
+            get: { model.deviceFlow != nil },
+            set: { if !$0 { model.cancelGitHubSignIn() } }
+        )) {
+            if let flow = model.deviceFlow { deviceFlowSheet(flow) }
+        }
+        // File-issue sheet.
+        .sheet(isPresented: $showIssueSheet) { issueSheet }
+    }
+
+    // MARK: github sheets
+
+    private func deviceFlowSheet(_ flow: DeviceFlowStart) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "person.badge.key").font(.largeTitle).foregroundStyle(.secondary)
+            Text("Sign in to GitHub").font(.title2.weight(.semibold))
+            Text("Your browser opened to GitHub's device page. Enter this code (it's copied to your clipboard):")
+                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text(flow.userCode)
+                .font(.system(.title, design: .monospaced).weight(.bold))
+                .textSelection(.enabled)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(.quaternary, in: .rect(cornerRadius: 8))
+            ProgressView("Waiting for authorization…").controlSize(.small)
+            Button("Cancel") { model.cancelGitHubSignIn() }
+            if let err = model.githubSignInError {
+                Text(err).font(.caption).foregroundStyle(.red)
+            }
+        }
+        .padding(28)
+        .frame(width: 360)
+    }
+
+    private var issueSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("File an issue for \(pkg.name)").font(.headline)
+            TextField("Title", text: $issueTitle)
+            TextField("Description", text: $issueBody, axis: .vertical)
+                .lineLimit(5...10)
+            HStack {
+                Spacer()
+                Button("Cancel") { showIssueSheet = false }
+                Button("Submit") {
+                    let t = issueTitle, b = issueBody
+                    showIssueSheet = false
+                    Task {
+                        if let url = await model.fileIssue(title: t, body: b),
+                           let u = URL(string: url) { NSWorkspace.shared.open(u) }
+                    }
+                    issueTitle = ""; issueBody = ""
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(issueTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 
     // MARK: meta
@@ -269,7 +330,7 @@ struct PackageDetailView: View {
     @ViewBuilder private var githubCard: some View {
         if let stats = model.detailRepoStats {
             GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 16) {
                         Label("\(stats.stars)", systemImage: "star")
                         Label("\(stats.forks)", systemImage: "tuningfork")
@@ -279,18 +340,35 @@ struct PackageDetailView: View {
                         Spacer()
                     }
                     .font(.callout)
-                    HStack {
+
+                    // Star / Watch / File issue — each routes through the model,
+                    // which prompts device-flow sign-in if signed out (no more
+                    // silent no-op). Mirrors the Tauri action set.
+                    HStack(spacing: 8) {
                         Button {
-                            Task {
-                                if let hp = info?.homepage {
-                                    try? await GitHubService().setStar(homepage: hp, starred: !(model.detailStarred ?? false))
-                                }
-                            }
+                            Task { await model.toggleStar() }
                         } label: {
                             Label(model.detailStarred == true ? "Starred" : "Star",
                                   systemImage: model.detailStarred == true ? "star.fill" : "star")
                         }
+                        Button {
+                            Task { await model.toggleWatch() }
+                        } label: {
+                            Label(model.detailWatching == true ? "Watching" : "Watch",
+                                  systemImage: model.detailWatching == true ? "eye.fill" : "eye")
+                        }
+                        Button {
+                            showIssueSheet = true
+                        } label: {
+                            Label("File issue", systemImage: "exclamationmark.bubble")
+                        }
                         Spacer()
+                    }
+                    .controlSize(.small)
+
+                    if !model.githubSignedIn {
+                        Text("Sign in to GitHub happens on first action.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -204,7 +204,10 @@ public actor TrendingHistoryService {
     /// Mirrors `trending_history_index` in `src-tauri/src/commands/trending.rs`.
     public func index() async -> [TrendingHistoryIndexEntry] {
         let url = baseURL.appendingPathComponent("index.json", isDirectory: false)
-        return await decode([TrendingHistoryIndexEntry].self, from: url) ?? []
+        // The endpoint returns an OBJECT — {generatedAt, packages:[…],
+        // cacheAgeSeconds} — not a bare array. Decode the wrapper and return
+        // `.packages`. (Decoding a bare array silently failed → no velocity.)
+        return await decode(TrendingHistoryIndex.self, from: url)?.packages ?? []
     }
 
     /// Convenience for the sparkline: the per-point values to plot.
@@ -256,6 +259,12 @@ public actor TrendingHistoryService {
 }
 
 // MARK: - Index entry
+
+/// Wrapper for the `index.json` payload: `{generatedAt, packages, cacheAgeSeconds}`.
+/// The leaderboard entries live under `packages`.
+struct TrendingHistoryIndex: Sendable, Codable {
+    let packages: [TrendingHistoryIndexEntry]
+}
 
 /// One row of the global trending-history index.
 ///

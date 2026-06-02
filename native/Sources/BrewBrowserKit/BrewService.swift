@@ -382,6 +382,11 @@ struct PackageInfo: Sendable, Hashable {
     let stableVersion: String?
     let desc: String?
     let homepage: String?
+    /// The GitHub repo URL resolved from homepage → source URLs (not just the
+    /// homepage field) — many packages have non-GitHub marketing homepages but
+    /// GitHub-hosted source. nil when nothing resolves. Mirrors the Tauri
+    /// `resolve_github_homepage` cascade (task #17). Drives the GitHub card.
+    let githubHomepage: String?
     let license: String?
     let tap: String?
     let caveats: String?
@@ -428,6 +433,13 @@ extension BrewService {
         let installedArr = o["installed"] as? [[String: Any]]
         let installed = installedArr?.last?["version"] as? String
             ?? (o["linked_keg"] as? String)
+        // GitHub resolution: homepage → urls.stable.url → urls.head.url.
+        let urls = o["urls"] as? [String: Any]
+        let stableURL = (urls?["stable"] as? [String: Any])?["url"] as? String
+        let headURL = (urls?["head"] as? [String: Any])?["url"] as? String
+        let github = GitHubService.resolveGithubURL([
+            o["homepage"] as? String, stableURL, headURL,
+        ])
         return PackageInfo(
             name: name,
             fullName: o["full_name"] as? String ?? name,
@@ -436,6 +448,7 @@ extension BrewService {
             stableVersion: stable,
             desc: o["desc"] as? String,
             homepage: o["homepage"] as? String,
+            githubHomepage: github,
             license: o["license"] as? String,
             tap: o["tap"] as? String,
             caveats: o["caveats"] as? String,
@@ -452,6 +465,11 @@ extension BrewService {
         let token = o["token"] as? String ?? o["full_token"] as? String ?? "?"
         let nameArr = o["name"] as? [String]
         let display = nameArr?.first ?? token
+        // GitHub resolution: homepage → top-level url (casks with GitHub-Releases
+        // artifacts but marketing homepages are common).
+        let github = GitHubService.resolveGithubURL([
+            o["homepage"] as? String, o["url"] as? String,
+        ])
         return PackageInfo(
             name: token,
             fullName: display,
@@ -460,6 +478,7 @@ extension BrewService {
             stableVersion: o["version"] as? String,
             desc: o["desc"] as? String,
             homepage: o["homepage"] as? String,
+            githubHomepage: github,
             license: nil,
             tap: o["tap"] as? String,
             caveats: o["caveats"] as? String,
