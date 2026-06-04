@@ -254,8 +254,17 @@ final class AppModel {
     /// token+kind → catalog package, for joining desc/version/homepage onto
     /// Trending rows. Populated by `loadCatalog` (not lazily during render).
     private var catalogByID: [String: CatalogPackage] = [:]
+    /// Homebrew analytics report tap formulae fully-qualified (`user/tap/name`),
+    /// but the bundled catalog + enrichment are keyed by the bare name. Returns
+    /// the last `/`-segment; bare tokens pass through unchanged.
+    static func bareToken(_ token: String) -> String {
+        token.split(separator: "/").last.map(String.init) ?? token
+    }
+
     private func catalogLookup(_ token: String, _ kind: InstalledPackage.Kind) -> CatalogPackage? {
-        catalogByID["\(kind.rawValue):\(token)"]
+        if let hit = catalogByID["\(kind.rawValue):\(token)"] { return hit }
+        let bare = Self.bareToken(token)
+        return bare != token ? catalogByID["\(kind.rawValue):\(bare)"] : nil
     }
 
     // ---- Trending (install leaderboard + computed velocity + opt-in sparkline) ----
@@ -662,7 +671,17 @@ final class AppModel {
         detailCategories = categoryCatalog?.categoryLabels(for: pkg.name, kind: pkg.kind) ?? []
 
         do {
-            let info = try await brew.info(name: pkg.name, kind: pkg.kind)
+            let info: PackageInfo
+            do {
+                info = try await brew.info(name: pkg.name, kind: pkg.kind)
+            } catch {
+                // A tap-qualified name (`user/tap/name`) that isn't tapped
+                // locally makes `brew info` fail. Retry the bare name — the core
+                // formula the list's catalog/enrichment data already resolved to.
+                let bare = Self.bareToken(pkg.name)
+                guard bare != pkg.name else { throw error }
+                info = try await brew.info(name: bare, kind: pkg.kind)
+            }
             // Guard against a stale load if the user clicked another package.
             guard detailPackage?.id == pkg.id else { return }
             detailInfo = info
@@ -697,18 +716,26 @@ final class AppModel {
     /// Enrichment for a token, with the live overlay preferred over the bundled
     /// catalog (mirrors the Tauri enrichment store's `lookup`).
     func enrichmentEntry(for token: String) -> EnrichmentEntry? {
-        liveEnrichment[token] ?? enrichment?.entry(for: token)
+        if let hit = liveEnrichment[token] ?? enrichment?.entry(for: token) { return hit }
+        // Tap-qualified token (`user/tap/name`) → retry under the bare name the
+        // enrichment is keyed by.
+        let bare = Self.bareToken(token)
+        guard bare != token else { return nil }
+        return liveEnrichment[bare] ?? enrichment?.entry(for: bare)
     }
 
     /// Fetch a token's live enrichment on demand and overlay it. Deduped +
     /// soft-fail; refreshes the open detail panel if it's the same package.
     func ensureLiveEnrichment(_ token: String) async {
-        guard settings.liveEnrichmentAllowed, !liveEnrichmentAttempted.contains(token) else { return }
-        liveEnrichmentAttempted.insert(token)
-        if let entry = await enrichmentLive.entry(token: token) {
-            liveEnrichment[token] = entry
-            if detailPackage?.name == token {
-                detailEnrichment = enrichmentEntry(for: token)
+        // Fetch + key by the bare name: tap-qualified tokens carry a `/`, which
+        // the served path + the token allowlist (EnrichmentLiveService) reject.
+        let bare = Self.bareToken(token)
+        guard settings.liveEnrichmentAllowed, !liveEnrichmentAttempted.contains(bare) else { return }
+        liveEnrichmentAttempted.insert(bare)
+        if let entry = await enrichmentLive.entry(token: bare) {
+            liveEnrichment[bare] = entry
+            if let dp = detailPackage, Self.bareToken(dp.name) == bare {
+                detailEnrichment = enrichmentEntry(for: dp.name)
             }
         }
     }

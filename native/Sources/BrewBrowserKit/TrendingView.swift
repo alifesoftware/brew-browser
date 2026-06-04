@@ -56,7 +56,17 @@ struct TrendingView: View {
                 Button {
                     Task { await model.refreshTrending() }
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    // Spinner replaces the arrow while fetching so a click reads
+                    // as "working" even when the refresh returns quickly.
+                    Label {
+                        Text("Refresh")
+                    } icon: {
+                        if model.trendingLoading {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
                 }
                 .disabled(model.trendingLoading)
                 .keyboardShortcut("r", modifiers: .command)

@@ -47,7 +47,18 @@ public struct ContentView: View {
                         Button {
                             Task { await model.refresh() }
                         } label: {
-                            Label("Refresh", systemImage: "arrow.clockwise")
+                            // Spinner replaces the arrow while refreshing so the
+                            // toolbar button shows active feedback, not just a
+                            // disabled grey-out.
+                            Label {
+                                Text("Refresh")
+                            } icon: {
+                                if model.isLoading {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                            }
                         }
                         .disabled(model.isLoading)
 
