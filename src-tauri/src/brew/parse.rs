@@ -1026,10 +1026,12 @@ mod tests {
 
     #[test]
     fn test_raw_cask_exists_in_applications_fallback_candidates() {
+        // A cask whose derived candidates cannot exist on any machine — the
+        // detection must be deterministically false (no panic, no false hit).
         let raw = RawCask {
-            token: "codex".into(),
+            token: "zz-brew-browser-nonexistent-cask".into(),
             full_token: None,
-            name: vec!["Codex".into()],
+            name: vec!["ZZ Brew Browser Nonexistent".into()],
             tap: None,
             desc: None,
             homepage: None,
@@ -1044,7 +1046,39 @@ mod tests {
             artifacts: None,
         };
         let detail = raw.to_detail(serde_json::Value::Null);
-        let _ = detail.exists_in_applications;
-        let _ = detail.is_mas;
+        assert!(!detail.exists_in_applications, "bogus cask must not resolve to an app bundle");
+        assert!(!detail.is_mas, "bogus cask must not be flagged as a Mac App Store app");
+    }
+
+    #[test]
+    fn check_app_exists_rejects_unsafe_or_missing_names() {
+        // Path-traversal, separators, and non-.app inputs are rejected before
+        // any filesystem access — deterministic on every platform.
+        assert!(!check_app_exists_macos("../Evil.app"), "path traversal must be rejected");
+        assert!(!check_app_exists_macos("sub/dir/App.app"), "separators must be rejected");
+        assert!(!check_app_exists_macos("NotAnApp"), "missing .app suffix must be rejected");
+        assert!(!check_app_exists_macos(""), "empty name must be rejected");
+        // Well-formed but guaranteed-absent bundle name → no false hit.
+        assert!(!check_app_exists_macos("ZzBrewBrowserNonexistent12345.app"));
+        // The MAS probe applies the same guards.
+        assert!(!check_app_is_mas_macos("../Evil.app"));
+        assert!(!check_app_is_mas_macos("ZzBrewBrowserNonexistent12345.app"));
+    }
+
+    #[test]
+    fn cask_app_filenames_extracts_targets_from_artifacts() {
+        // String form, {target} object, and {source}-basename fallback; non-app
+        // artifact stanzas are ignored.
+        let artifacts = serde_json::json!([
+            { "app": ["Plain.app"] },
+            { "app": [ { "target": "Renamed.app" } ] },
+            { "app": [ { "source": "build/output/FromSource.app" } ] },
+            { "zap": [ { "trash": "~/Library/Foo" } ] }
+        ]);
+        let out = cask_app_filenames(&Some(artifacts));
+        assert!(out.contains(&"Plain.app".to_string()));
+        assert!(out.contains(&"Renamed.app".to_string()));
+        assert!(out.contains(&"FromSource.app".to_string()), "source path must reduce to its basename");
+        assert_eq!(out.len(), 3, "non-app stanzas must be ignored");
     }
 }
