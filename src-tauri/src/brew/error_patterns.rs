@@ -73,6 +73,31 @@ pub fn friendlify(stderr_excerpt: &str, command: &str) -> Option<String> {
         );
     }
 
+    // Pattern 3 — `brew services start|stop|restart` failed because the
+    // service plist lives in a launchd domain that the current user
+    // session does not own (user vs. system launchd domain, a common
+    // Sonoma+ failure mode). The stderr shape we key on:
+    //
+    //   Could not find service "ollama" in domain for current user
+    //   (gui/501/...). Run `launchctl bootstrap` with the right
+    //   domain, or move the plist to ~/Library/LaunchAgents.
+    //
+    // We match on the first line of the canonical upstream message.
+    // The command is matched on `services` so we don't fire on every
+    // unrelated "domain" mention.
+    if command.contains("services")
+        && (stderr_excerpt.contains("Could not find service")
+            || stderr_excerpt.contains("not found in domain"))
+    {
+        return Some(
+            "brew could not find this service in the current launchd \
+             domain. The plist is likely registered for a different user \
+             or session. Try `brew services restart`, or move the plist to \
+             ~/Library/LaunchAgents and run `launchctl bootstrap gui/$UID`."
+                .to_string(),
+        );
+    }
+
     None
 }
 
@@ -202,4 +227,37 @@ These open issues may also help:
         assert!(friendlify("", "brew bundle dump").is_none());
         assert!(friendlify("Error: anything", "").is_none());
     }
+
+    // ---- launchd domain ----
+
+    const REAL_LAUNCHD_STDERR: &str = "Error: Could not find service \"ollama\" in domain for current user (gui/501/16).\nTry running launchctl bootstrap under the right domain, or move the plist to ~/Library/LaunchAgents.\n";
+
+    #[test]
+    fn launchd_domain_pattern_matches_on_services() {
+        let msg = friendlify(REAL_LAUNCHD_STDERR, "brew services start ollama")
+            .expect("launchd pattern should match real services-start stderr");
+        assert!(
+            msg.contains("launchd") && msg.contains("~/Library/LaunchAgents"),
+            "friendly msg should mention launchd and the plist location; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn launchd_pattern_does_not_fire_on_unrelated_command() {
+        // The substring 'Could not find service' alone must not trigger the
+        // hint; the gate is command contains services.
+        assert!(
+            friendlify(REAL_LAUNCHD_STDERR, "brew install ollama").is_none(),
+            "launchd pattern must not fire outside services commands"
+        );
+    }
+
+    #[test]
+    fn launchd_pattern_does_not_fire_on_empty_stderr() {
+        assert!(
+            friendlify("", "brew services start ollama").is_none(),
+            "empty stderr must fall through"
+        );
+    }
+
 }
