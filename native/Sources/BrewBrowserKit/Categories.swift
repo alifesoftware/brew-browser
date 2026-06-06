@@ -15,6 +15,18 @@ struct CategoryBreakdown: Identifiable, Hashable, Sendable {
     var icon: String = "questionmark.circle"
 }
 
+/// One Discover category tile: glyph + label + the number of catalog packages in
+/// the category. Backs the Discover browse grid (mirrors the Tauri
+/// `CategoryTile` in `src/lib/stores/categories.svelte.ts`).
+struct CategoryTile: Identifiable, Hashable, Sendable {
+    var id: String { slug }
+    let slug: String
+    let label: String
+    /// SF Symbol from `categories.json` `iconSF` (data-driven, no UI mapping).
+    let icon: String
+    let count: Int
+}
+
 struct CategoryCatalog: Sendable {
     /// slug → display label
     private let labels: [String: String]
@@ -80,6 +92,25 @@ struct CategoryCatalog: Sendable {
     /// the Discover category filter predicate.
     func isMember(token: String, kind: InstalledPackage.Kind, slug: String) -> Bool {
         slugs(for: token, kind: kind).contains(slug)
+    }
+
+    /// Category tiles for the Discover browse grid: every known category with its
+    /// glyph + the count of catalog packages (formulae + casks) in it, sorted by
+    /// descending count. Mirrors the Tauri `categories.tiles` derivation
+    /// (`src/lib/stores/categories.svelte.ts:62-81`); `uncategorized` is excluded
+    /// (the Tauri grid sinks it to last, native simply omits the noise bucket).
+    func tiles() -> [CategoryTile] {
+        var counts: [String: Int] = [:]
+        for cats in formulae.values { for c in cats { counts[c, default: 0] += 1 } }
+        for cats in casks.values { for c in cats { counts[c, default: 0] += 1 } }
+        return labels
+            .filter { $0.key != "uncategorized" }
+            .map { slug, label in
+                CategoryTile(slug: slug, label: label,
+                             icon: sfIcons[slug] ?? "questionmark.circle",
+                             count: counts[slug] ?? 0)
+            }
+            .sorted { $0.count > $1.count }
     }
 
     /// Top-N category breakdown across the installed set. Each package

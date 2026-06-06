@@ -74,11 +74,18 @@ struct PackageDetailView: View {
                 } else {
                     metaCard
                     if let summary = enrichment?.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.callout)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.quaternary, in: .rect(cornerRadius: 10))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(summary)
+                                .font(.callout)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            HStack {
+                                Spacer()
+                                wrongButton(.summary, currentValue: summary)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary, in: .rect(cornerRadius: 10))
                     }
                     if let desc = info?.desc, !desc.isEmpty {
                         Text(desc).font(.subheadline).foregroundStyle(.secondary)
@@ -206,17 +213,49 @@ struct PackageDetailView: View {
     }
 
     private var categoriesRow: some View {
-        FlowRow(spacing: 6) {
-            ForEach(model.detailCategories, id: \.self) { label in
-                Chip(text: label)
+        VStack(alignment: .leading, spacing: 4) {
+            FlowRow(spacing: 6) {
+                ForEach(model.detailCategories, id: \.self) { label in
+                    Chip(text: label)
+                }
+            }
+            HStack {
+                Spacer()
+                wrongButton(.categories, currentValue: model.detailCategories.joined(separator: ", "))
             }
         }
     }
 
     private func tagsRow(_ tags: [String]) -> some View {
-        FlowRow(spacing: 6) {
-            ForEach(tags, id: \.self) { Chip(text: $0) }
+        VStack(alignment: .leading, spacing: 4) {
+            FlowRow(spacing: 6) {
+                ForEach(tags, id: \.self) { Chip(text: $0) }
+            }
+            HStack {
+                Spacer()
+                wrongButton(.tags, currentValue: tags.joined(separator: ", "))
+            }
         }
+    }
+
+    // MARK: enrichment correction ("Wrong?")
+
+    /// Small, secondary "Wrong?" affordance next to an AI-enriched field. Opens a
+    /// pre-filled brew-browser GitHub issue (token + field + current value) via
+    /// `ReportIssue` — the deeplink correction path. Enrichment corrections go to
+    /// the brew-browser repo (not the package's own repo), so this reuses the
+    /// job/enrichment issue builder rather than the package File-issue sheet.
+    private func wrongButton(_ field: ReportIssue.EnrichmentField, currentValue: String) -> some View {
+        Button {
+            ReportIssue.openEnrichmentCorrection(token: pkg.name, field: field, currentValue: currentValue)
+        } label: {
+            Label("Wrong?", systemImage: "exclamationmark.bubble")
+                .font(.caption2)
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Report a correction for this package's \(field.rawValue.lowercased())")
     }
 
     // MARK: security
@@ -367,6 +406,10 @@ struct PackageDetailView: View {
                 ForEach(cases, id: \.self) { c in
                     Label(c, systemImage: "checkmark.circle").font(.callout)
                 }
+                HStack {
+                    Spacer()
+                    wrongButton(.useCases, currentValue: cases.joined(separator: "\n"))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 2)
@@ -377,12 +420,18 @@ struct PackageDetailView: View {
 
     private func similarCard(_ similar: [String]) -> some View {
         GroupBox {
-            FlowRow(spacing: 6) {
-                ForEach(similar, id: \.self) { name in
-                    Button(name) { model.openDetail(InstalledPackage(name: name, version: "—", kind: .formula)) }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(.quaternary, in: .capsule)
+            VStack(alignment: .leading, spacing: 6) {
+                FlowRow(spacing: 6) {
+                    ForEach(similar, id: \.self) { name in
+                        Button(name) { model.openDetail(InstalledPackage(name: name, version: "—", kind: .formula)) }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(.quaternary, in: .capsule)
+                    }
+                }
+                HStack {
+                    Spacer()
+                    wrongButton(.similar, currentValue: similar.joined(separator: ", "))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

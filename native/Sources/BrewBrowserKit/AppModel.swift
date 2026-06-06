@@ -221,6 +221,41 @@ public final class AppModel {
         catalog.isEmpty ? [] : (categoryCatalog?.allCategories() ?? [])
     }
 
+    /// Category tiles for the Discover browse grid (glyph + label + catalog
+    /// count, descending). Empty until the bundled category catalog is parsed.
+    var categoryTiles: [CategoryTile] {
+        categoryCatalog?.tiles() ?? []
+    }
+
+    /// Active-catalog freshness summary (bundled vs user-refreshed copy). Loaded
+    /// lazily by ``loadCatalogSummary``; drives the Dashboard freshness strip +
+    /// Discover stale banner.
+    var catalogSummary: CatalogSummary?
+    /// True while a "Refresh from brew.sh" is in flight (mirrors the Tauri
+    /// `catalog.refreshing`). Disables the Refresh buttons.
+    var catalogRefreshing = false
+    /// Human message from the most recent failed refresh, else nil.
+    var catalogRefreshError: String?
+
+    /// Whether the active catalog is older than the user's stale threshold
+    /// (`settings.catalogStaleBannerDays`, default 14). False until the summary
+    /// loads so the banner/strip don't flash on first paint. Mirrors the Tauri
+    /// `catalog.isStale` getter.
+    var catalogIsStale: Bool {
+        guard let s = catalogSummary else { return false }
+        return s.daysOld > Int(settings.catalogStaleBannerDays)
+    }
+
+    /// "today" / "1 day old" / "N days old" / "—" — matches the Tauri
+    /// `daysOldLabel` getter. "—" until the summary loads so the spot doesn't
+    /// flash empty.
+    var catalogDaysOldLabel: String {
+        guard let s = catalogSummary else { return "—" }
+        if s.daysOld <= 0 { return "today" }
+        if s.daysOld == 1 { return "1 day old" }
+        return "\(s.daysOld) days old"
+    }
+
     /// Discover rows: catalog filtered by category + the shared search field,
     /// enrichment-joined, install-state flagged. (Single `.searchable` rule:
     /// reuses `globalQuery`, never adds its own field — see libraryRows.)
@@ -289,6 +324,55 @@ public final class AppModel {
         for p in catalog { byID[p.id] = p }
         catalogByID = byID
         catalogLoading = false
+    }
+
+    /// Lazy-load the active-catalog freshness summary (bundled or user-refreshed)
+    /// for the Dashboard strip + Discover banner. Idempotent.
+    func loadCatalogSummary() async {
+        guard catalogSummary == nil else { return }
+        catalogSummary = await catalogService.summary()
+    }
+
+    /// "Refresh from brew.sh" — re-download the Homebrew catalog, persist the
+    /// user copy, and swap it in. Gated on Offline Mode (the master network
+    /// gate) like every other outbound call. On success the in-memory catalog +
+    /// summary go fresh and the dashboard categories rebuild; on failure the
+    /// message lands in `catalogRefreshError`. Mirrors the Tauri
+    /// `catalog.refresh()` store action + `refreshCatalog` Dashboard handler.
+    func refreshCatalogFromBrewSh() async {
+        guard !catalogRefreshing else { return }
+        guard settings.networkAllowed("catalog_refresh") else {
+            catalogRefreshError = "Offline mode is on — catalog refresh is blocked. Disable it in Settings → Network."
+            return
+        }
+        catalogRefreshing = true
+        catalogRefreshError = nil
+        defer { catalogRefreshing = false }
+        do {
+            let summary = try await catalogService.refresh()
+            // Swap the freshly-parsed catalog in + rebuild the token index.
+            catalog = await catalogService.all()
+            var byID: [String: CatalogPackage] = [:]
+            byID.reserveCapacity(catalog.count)
+            for p in catalog { byID[p.id] = p }
+            catalogByID = byID
+            catalogSummary = summary
+            // Rebuild the dashboard category breakdown against the fresh catalog.
+            if !installed.isEmpty {
+                categories = categoryCatalog?.breakdown(installed: installed) ?? []
+            }
+            // Opt-in live categories may also have advanced — best-effort pull.
+            await refreshLiveCategoriesIfNewer()
+        } catch {
+            catalogRefreshError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Record a committed Discover search term into the persisted recent list
+    /// (deduped, capped). Called when the user submits a search while on the
+    /// Discover section. Delegates to `LocalPrefs.recordSearch`.
+    func recordDiscoverSearch(_ term: String) {
+        LocalPrefs.shared.recordSearch(term)
     }
 
     /// token+kind → catalog package, for joining desc/version/homepage onto

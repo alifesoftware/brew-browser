@@ -77,7 +77,12 @@ final class LocalPrefs {
         static let activityMaxLines = "brew-browser.activity.max-lines"
         static let sidebarCollapsed = "brew-browser.sidebar-collapsed"
         static let notifyOnTaskCompletion = "brew-browser.notify-on-task-completion"
+        static let recentSearches = "brew-browser.discover.recent-searches"
     }
+
+    /// How many recent Discover searches to retain (mirrors the Tauri
+    /// `search.recent` cap in `src/lib/stores/search.svelte.ts`).
+    static let recentSearchesMax = 8
 
     // MARK: - Defaults & clamps (from ui.svelte.ts)
 
@@ -146,6 +151,31 @@ final class LocalPrefs {
     /// background. Off by default. Toggling on requests notification auth.
     var notifyOnTaskCompletion: Bool {
         didSet { defaults.set(notifyOnTaskCompletion, forKey: Key.notifyOnTaskCompletion) }
+    }
+
+    /// Recent Discover search terms, newest first. Mirrors the Tauri
+    /// `search.recent` chips (`src/lib/stores/search.svelte.ts:42-43`); the web
+    /// app kept these only in memory, here they persist to `UserDefaults` so the
+    /// chips survive relaunch. Capped + deduped via ``recordSearch(_:)``.
+    var recentSearches: [String] {
+        didSet { defaults.set(recentSearches, forKey: Key.recentSearches) }
+    }
+
+    /// Push a term to the front of `recentSearches`, deduped (case-insensitive)
+    /// and capped at ``recentSearchesMax`` — the native analog of the Tauri
+    /// `recent = [q, ...recent.filter(r => r !== q)].slice(0, 8)` line. No-op for
+    /// blank input.
+    func recordSearch(_ term: String) {
+        let q = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        var next = recentSearches.filter { $0.caseInsensitiveCompare(q) != .orderedSame }
+        next.insert(q, at: 0)
+        recentSearches = Array(next.prefix(Self.recentSearchesMax))
+    }
+
+    /// Clear all recent searches (the "Clear" affordance on the chip row).
+    func clearRecentSearches() {
+        recentSearches = []
     }
 
     // MARK: - Shared instance
@@ -220,6 +250,9 @@ final class LocalPrefs {
         } else {
             self.notifyOnTaskCompletion = Self.defaultNotifyOnTaskCompletion
         }
+
+        // recentSearches — absent key defaults to empty; only keep strings.
+        self.recentSearches = (defaults.array(forKey: Key.recentSearches) as? [String]) ?? []
     }
 
     // MARK: - Theme application

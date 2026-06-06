@@ -22,6 +22,7 @@ struct DashboardView: View {
             } else {
                 VStack(alignment: .leading, spacing: 16) {
                     HeroStrip(model: model)
+                    CatalogFreshnessStrip(model: model)
                     if model.outdatedCount > 0 { UpdatesCard(model: model) }
 
                     // Composition + Top categories sit side by side when the
@@ -124,6 +125,54 @@ struct StatTile: View {
             .contentShape(.rect)
         }
         .onTapGesture { action?() }
+    }
+}
+
+// MARK: - Catalog freshness
+
+/// Dashboard catalog-freshness strip — "Catalog: N days old (source)" with a
+/// Refresh button that re-downloads the index from brew.sh. Amber when stale.
+/// Parity with the Tauri `Dashboard.svelte` catalog line (`:524-553`); the
+/// Refresh routes through `AppModel.refreshCatalogFromBrewSh` (Offline-gated).
+struct CatalogFreshnessStrip: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let stale = model.catalogIsStale
+        HStack(spacing: 8) {
+            Text("Catalog: \(Text(model.catalogDaysOldLabel).fontWeight(.semibold))")
+                .foregroundStyle(.secondary)
+            if let src = model.catalogSummary?.source {
+                Text("(\(src.rawValue))")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let err = model.catalogRefreshError {
+                Text(err)
+                    .font(.caption).foregroundStyle(.red)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            Button {
+                Task { await model.refreshCatalogFromBrewSh() }
+            } label: {
+                if model.catalogRefreshing {
+                    Label("Refreshing…", systemImage: "arrow.clockwise")
+                } else if stale {
+                    Label("Refresh from brew.sh →", systemImage: "arrow.clockwise")
+                } else {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+            }
+            .controlSize(.small)
+            .disabled(model.catalogRefreshing)
+            .help("Re-download the Homebrew catalog from formulae.brew.sh")
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(stale ? AnyShapeStyle(.orange.opacity(0.12)) : AnyShapeStyle(.quaternary),
+                    in: .rect(cornerRadius: 8))
+        .task { await model.loadCatalogSummary() }
     }
 }
 
