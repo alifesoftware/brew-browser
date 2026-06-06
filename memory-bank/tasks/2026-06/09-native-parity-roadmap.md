@@ -47,13 +47,22 @@ Native dest: `AppModel` (scan-all + severity index), `DashboardView`,
 - B5. Detail security card: clickable CVE/GHSA/OSV → canonical advisory; "Upgrade
   to fix" when installed < fixedIn.
 
-## Bundle C — Self-updater  ⚠️ NEEDS USER INPUT
+## Bundle C — Self-updater (DECISION: **Sparkle**, 2026-06-06)
 Tauri: `update/*` commands, `SettingsSectionUpdates.svelte`, `UpdateIndicator.svelte`.
-- C1. Decision pending: real **Sparkle** integration (SPM dep + appcast + EdDSA
-  signing keys + hosting) vs **UI-only** (check/notify + "download on website").
-  Sparkle needs signing infra the agent can't self-provision → confirm scope.
-- C2. Whatever scope: wire the Updates settings tab + a titlebar "update available"
-  affordance.
+User chose true in-app self-update via **Sparkle 2** (the standard for non-MAS
+macOS apps; SwiftUI-compatible). MAS is out (sandboxing blocks shelling to brew).
+- C1. Add Sparkle via SPM to `native/Package.swift`; create an updater controller
+  (`SPUStandardUpdaterController`) wired into the app + a `Settings → Updates` tab
+  (Check now / last-checked / auto-check daily) and a titlebar "update available"
+  affordance (mirror `UpdateIndicator.svelte`).
+- C2. `Info.plist`: `SUFeedURL` + `SUPublicEDKey` + `SUEnableAutomaticChecks`.
+  Add an `appcast.xml` generation step (Sparkle `generate_appcast`).
+- **BLOCKED on user (provision, can't be self-generated):**
+  1. EdDSA keypair via Sparkle `generate_keys` → public key into Info.plist,
+     private key kept in the user's Keychain (never committed).
+  2. A hosted appcast feed URL (e.g. zerologic host or GitHub Pages/releases) +
+     where notarized .app/.zip artifacts live.
+  Build everything else; leave these two as clearly-marked TODO placeholders.
 
 ## Bundle D — Enrichment / Discover
 Tauri: `Discover.svelte` (tile grid, recent searches, stale banner),

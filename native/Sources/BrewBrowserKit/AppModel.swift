@@ -106,10 +106,10 @@ struct TrendingRow: Identifiable, Hashable, Sendable {
 
 @MainActor
 @Observable
-final class AppModel {
+public final class AppModel {
     var selection: Section = .dashboard
     var installed: [InstalledPackage] = []
-    var isLoading = false
+    public var isLoading = false
     var loadError: String?
 
     // Snapshots (Brewfile dump/restore) — see SnapshotStore.
@@ -419,6 +419,91 @@ final class AppModel {
         selection = .library
     }
 
+    // MARK: - Keyboard commands (⌘ menu shortcuts)
+
+    /// Navigate to a section by its ⌘0–6 number. Mirrors the Tauri `+page.svelte`
+    /// map (0 = dashboard … 6 = activity); see `Sidebar.svelte:35-43`.
+    public func go(toSectionNumber n: Int) {
+        let map: [Int: Section] = [
+            0: .dashboard, 1: .library, 2: .discover,
+            3: .trending, 4: .snapshots, 5: .services, 6: .activity,
+        ]
+        if let s = map[n] { selection = s }
+    }
+
+    /// ⌘L — toggle the bottom Activity drawer. When opening with no active job,
+    /// point it at the newest job so the console isn't blank.
+    public func toggleDrawer() {
+        drawerOpen.toggle()
+        if drawerOpen, activeJobId == nil { activeJobId = jobs.first?.id }
+    }
+
+    /// ⌘R — refresh whichever surface is showing (matches the Tauri ⌘R switch in
+    /// `+page.svelte:97-108`). Trending/Snapshots/Services reload their own data;
+    /// every other section falls back to the global Library/Dashboard refresh.
+    public func refreshCurrent() async {
+        switch selection {
+        case .trending:  await refreshTrending()
+        case .snapshots: await loadSnapshots()
+        case .services:  await loadServices()
+        default:         await refresh()
+        }
+    }
+
+    /// ⌘⇧L — cycle the appearance theme Light → Dark → System and apply it.
+    /// Mirrors the Tauri theme cycle (`+page.svelte:63-71`).
+    public func cycleTheme() {
+        let prefs = LocalPrefs.shared
+        let order: [AppTheme] = [.light, .dark, .system]
+        let next = order[(order.firstIndex(of: prefs.theme).map { $0 + 1 } ?? 0) % order.count]
+        prefs.theme = next
+        prefs.applyTheme()
+    }
+
+    /// Esc — close the open detail inspector, if any. The palette closes itself
+    /// (it owns the sheet's own Esc). Returns true if it consumed the Esc.
+    @discardableResult
+    func closeTopmostOverlay() -> Bool {
+        if showDetail { closeDetail(); return true }
+        return false
+    }
+
+    // MARK: - Command palette search (⌘K)
+
+    /// Top installed matches for the palette (mirrors `CommandPalette.svelte`
+    /// `installedHits` — name substring, cap 8). Distinct from `suggestions`,
+    /// which is driven by the toolbar `globalQuery`; the palette has its own query.
+    func paletteInstalled(_ query: String) -> [InstalledPackage] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return [] }
+        return Array(
+            installed
+                .filter { $0.name.lowercased().contains(q) }
+                .prefix(8)
+        )
+    }
+
+    /// Catalog ("index") matches for the palette, de-duped against the installed
+    /// hits (mirrors `CommandPalette.svelte` `indexHits`, cap 10). The Tauri
+    /// palette calls `local_search` — an in-process scan over the bundled catalog
+    /// + enrichment, NOT `brew search` (which was dropped in v0.3.1). The native
+    /// catalog is already in memory (`catalog`), so this reuses it directly: no
+    /// subprocess, instant results. Matches token + display name.
+    func paletteCatalog(_ query: String) -> [CatalogPackage] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard q.count >= 2, !catalog.isEmpty else { return [] }
+        let installedNames = Set(paletteInstalled(query).map { $0.name.lowercased() })
+        return Array(
+            catalog
+                .lazy
+                .filter {
+                    $0.token.lowercased().contains(q) || $0.displayName.lowercased().contains(q)
+                }
+                .filter { !installedNames.contains($0.token.lowercased()) }
+                .prefix(10)
+        )
+    }
+
     // ---- Dashboard stats (all from real brew data) ----
     var formulaCount = 0
     var caskCount = 0
@@ -490,7 +575,13 @@ final class AppModel {
     /// The job shown in the drawer console.
     var activeJobId: UUID?
     /// Whether the bottom Activity drawer is expanded.
-    var drawerOpen = false
+    public var drawerOpen = false
+
+    // ---- Command palette (⌘K) ----
+    /// Whether the ⌘K command palette sheet is presented. Mirrors the Tauri
+    /// `ui.paletteOpen` flag (CommandPalette.svelte) — toggled by the ⌘K menu
+    /// command and the palette's own close/activate paths.
+    public var paletteOpen = false
 
     // ---- Vulnerabilities (Security card) ----
     var detailVulns: [VulnFinding] = []
@@ -532,7 +623,7 @@ final class AppModel {
     private let trendingService = TrendingService()
     private let githubService = GitHubService()
 
-    init() {}
+    public init() {}
 
 #if DEBUG
     /// A model pre-populated with representative data for SwiftUI `#Preview`s

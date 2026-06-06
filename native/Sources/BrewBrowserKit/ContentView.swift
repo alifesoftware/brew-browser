@@ -17,11 +17,14 @@ public func applyDockIcon() {
 /// sidebar, the unified title bar, the toolbar, and all materials. We don't
 /// touch the window, tint, transparency, or title bar.
 public struct ContentView: View {
-    @State private var model = AppModel()
+    /// The shared app model. Owned by the `App` scene (BrewBrowserApp) so the
+    /// scene-level `.commands` keyboard shortcuts drive the very same instance
+    /// the views render. `@Bindable` here, `@State` at the owner.
+    @Bindable var model: AppModel
     @Environment(\.openSettings) private var openSettings
     @Environment(\.scenePhase) private var scenePhase
 
-    public init() {}
+    public init(model: AppModel) { self.model = model }
 
     public var body: some View {
       VStack(spacing: 0) {
@@ -175,6 +178,19 @@ public struct ContentView: View {
       .task {
             model.loadJobs()
             if model.installed.isEmpty { await model.loadLibrary() }
+      }
+      // ⌘K command palette — stock `.sheet` overlay (BrewBrowserApp's .commands
+      // flips `paletteOpen`). The catalog backs the palette's index search, so
+      // make sure it's loaded the first time the palette opens.
+      .sheet(isPresented: $model.paletteOpen) {
+          CommandPaletteView(model: model)
+      }
+      // Esc closes the open detail inspector. The palette is a `.sheet`, which
+      // handles its own Esc, so by the time Esc reaches here the palette is
+      // already closed and only the inspector remains. Returns `.ignored` when
+      // there's nothing to close so Esc keeps its default behavior elsewhere.
+      .onKeyPress(.escape) {
+          model.closeTopmostOverlay() ? .handled : .ignored
       }
     }
 
