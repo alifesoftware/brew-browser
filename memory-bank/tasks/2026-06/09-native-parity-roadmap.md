@@ -57,12 +57,26 @@ macOS apps; SwiftUI-compatible). MAS is out (sandboxing blocks shelling to brew)
   affordance (mirror `UpdateIndicator.svelte`).
 - C2. `Info.plist`: `SUFeedURL` + `SUPublicEDKey` + `SUEnableAutomaticChecks`.
   Add an `appcast.xml` generation step (Sparkle `generate_appcast`).
+- **Host (decided 2026-06-06): mirror the Tauri updater** — Tauri's updater feed
+  is the PUBLIC domain `https://brew-browser.zerologic.com/updater.json`
+  (`src-tauri/tauri.conf.json:34`), served by the same Caddy that fronts
+  `/enrichment/*` + `/trending-history/*`. The private build-host IP appears in
+  ZERO committed files; keep it that way. Sparkle mirror = same public host, new
+  path:
+  - `SUFeedURL` = `https://brew-browser.zerologic.com/appcast.xml` (public domain,
+    safe to commit into Info.plist).
+  - Artifacts: notarized `.app` zip under a sibling path on the same domain.
+  - Caddy: one `handle_path /appcast.xml` + a static path for the zip, mirroring
+    the existing trending/enrichment blocks.
 - **BLOCKED on user (provision, can't be self-generated):**
-  1. EdDSA keypair via Sparkle `generate_keys` → public key into Info.plist,
-     private key kept in the user's Keychain (never committed).
-  2. A hosted appcast feed URL (e.g. zerologic host or GitHub Pages/releases) +
-     where notarized .app/.zip artifacts live.
-  Build everything else; leave these two as clearly-marked TODO placeholders.
+  1. **Sparkle EdDSA keypair** via `generate_keys` — NOTE Tauri signs with
+     minisign (its `tauri.conf.json` pubkey); Sparkle uses ed25519, so the key
+     does NOT carry over. Public key → Info.plist `SUPublicEDKey`; private key
+     stays in the login Keychain (never committed).
+  2. Caddy path + actually hosting `appcast.xml` + the notarized zip on
+     `brew-browser.zerologic.com`; and notarizing the `.app`.
+  Build everything else with the public domain; leave the key + hosting as
+  clearly-marked TODO placeholders.
 
 ## Bundle D — Enrichment / Discover
 Tauri: `Discover.svelte` (tile grid, recent searches, stale banner),
