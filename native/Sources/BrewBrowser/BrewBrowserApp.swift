@@ -128,12 +128,10 @@ struct AppCommands: Commands {
     }
 }
 
-/// Shared About / Sponsor strings — the single source of truth for the standard
-/// About panel credits and the Sponsor menu item. The sponsor URL matches the
-/// toolbar heart + Settings → About (`ContentView.swift`, `SettingsView.swift`).
+/// Sponsor URL for the app menu's "Sponsor Brew Browser…" item. Matches the
+/// toolbar heart + About box.
 enum AboutInfo {
     static let sponsorURL = "https://github.com/sponsors/msitarzewski"
-    static let repoURL = "https://github.com/msitarzewski/brew-browser"
 }
 
 
