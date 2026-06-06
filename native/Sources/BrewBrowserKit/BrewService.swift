@@ -26,6 +26,10 @@ struct OutdatedPackage: Identifiable, Hashable, Sendable {
     /// formula vs cask — taken from the `brew outdated --json=v2` array the row
     /// came from, so the Dashboard pill + detail open use the right kind.
     let kind: InstalledPackage.Kind
+    /// `pinned` from `brew outdated --json=v2` (formulae only; casks can't be
+    /// pinned). Pinned formulae are excluded from the curated upgrade sheet
+    /// because brew refuses to upgrade them. Mirrors the Tauri `Package.pinned`.
+    var pinned: Bool = false
 }
 
 /// One Homebrew background service from `brew services list --json`, mirroring
@@ -411,7 +415,9 @@ struct BrewService: Sendable {
                     ?? (item["installed_versions"] as? [Any])?.first as? String
                     ?? "?"
                 let current = item["current_version"] as? String ?? "?"
-                out.append(OutdatedPackage(name: name, installedVersion: installed, currentVersion: current, kind: kind))
+                // `pinned` only appears on formulae; casks never carry it.
+                let pinned = item["pinned"] as? Bool ?? false
+                out.append(OutdatedPackage(name: name, installedVersion: installed, currentVersion: current, kind: kind, pinned: pinned))
             }
         }
         return out.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

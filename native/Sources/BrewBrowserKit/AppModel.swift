@@ -1373,6 +1373,17 @@ public final class AppModel {
         await startJob("Upgrading all packages", args: ["upgrade"], startedAt: Date().timeIntervalSince1970)
     }
 
+    /// Curated upgrade — run ONE `brew upgrade <name1> <name2> …` for the
+    /// user-selected outdated packages. Drives the Dashboard "Choose…" sheet.
+    /// Mirrors the Tauri `brew_upgrade_many` flow (`UpgradeModal.svelte`): a
+    /// single streaming Activity job rather than N sequential ones. `startJob`
+    /// calls `refresh()` on completion, so the outdated count self-updates.
+    func upgradeMany(_ names: [String]) async {
+        guard !names.isEmpty else { return }
+        let label = names.count == 1 ? "Upgrading \(names[0])" : "Upgrading \(names.count) packages"
+        await startJob(label, args: ["upgrade"] + names, startedAt: Date().timeIntervalSince1970)
+    }
+
     // MARK: - Snapshots (Brewfile)
 
     /// Load the saved Brewfile snapshots from disk (newest first).

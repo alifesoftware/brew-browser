@@ -445,34 +445,73 @@ struct PackageDetailView: View {
 
     @ViewBuilder private var githubCard: some View {
         if let stats = model.detailRepoStats {
+            // Toggle states: filled/active when starred or watching, calling the
+            // unstar/unwatch path when already on. Mirrors `PackageDetail.svelte`.
+            let starred = model.githubSignedIn && model.detailStarred == true
+            let watching = model.githubSignedIn && model.detailWatching == true
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 16) {
                         Label("\(stats.stars)", systemImage: "star")
                         Label("\(stats.forks)", systemImage: "tuningfork")
                         if let tag = stats.lastReleaseTag {
-                            Label(tag, systemImage: "tag")
+                            if let date = stats.lastReleaseDate {
+                                Label("\(tag) (\(relativeISO(date)))", systemImage: "tag")
+                            } else {
+                                Label(tag, systemImage: "tag")
+                            }
                         }
                         Spacer()
                     }
                     .font(.callout)
 
+                    // Archived-repo warning — likely unmaintained.
+                    if stats.archived {
+                        Label {
+                            Text("Archived\(stats.archivedAt.map { " \(relativeISO($0))" } ?? "") — likely unmaintained.")
+                        } icon: {
+                            Image(systemName: "archivebox").foregroundStyle(.orange)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    // License-mismatch warning — brew license != GitHub SPDX.
+                    if let spdx = stats.licenseSpdx, let brewLic = info?.license, spdx != brewLic {
+                        Label {
+                            Text("License mismatch — brew: \(Text(brewLic).monospaced()), GitHub: \(Text(spdx).monospaced())")
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("brew reports: \(brewLic) · GitHub reports: \(spdx)")
+                    }
+
                     // Star / Watch / File issue — each routes through the model,
                     // which prompts device-flow sign-in if signed out (no more
-                    // silent no-op). Mirrors the Tauri action set.
+                    // silent no-op). Star + Watch are toggles: the label and the
+                    // filled glyph reflect the current state. Mirrors the Tauri
+                    // action set.
                     HStack(spacing: 8) {
                         Button {
                             Task { await model.toggleStar() }
                         } label: {
-                            Label(model.detailStarred == true ? "Starred" : "Star",
-                                  systemImage: model.detailStarred == true ? "star.fill" : "star")
+                            Label(starred ? "Starred" : "Star",
+                                  systemImage: starred ? "star.fill" : "star")
                         }
+                        .help(!model.githubSignedIn
+                              ? "Sign in to GitHub to star this repository"
+                              : starred ? "Unstar this repository" : "Star this repository")
                         Button {
                             Task { await model.toggleWatch() }
                         } label: {
-                            Label(model.detailWatching == true ? "Watching" : "Watch",
-                                  systemImage: model.detailWatching == true ? "eye.fill" : "eye")
+                            Label(watching ? "Watching" : "Watch",
+                                  systemImage: watching ? "eye.fill" : "eye")
                         }
+                        .help(!model.githubSignedIn
+                              ? "Sign in to GitHub to watch this repository"
+                              : watching ? "Stop watching" : "Watch for activity")
                         Button {
                             showIssueSheet = true
                         } label: {
@@ -493,6 +532,16 @@ struct PackageDetailView: View {
                 Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
             }
         }
+    }
+
+    /// Relative-time label for an ISO 8601 timestamp ("2 months ago"). Mirrors
+    /// the Tauri `fmtRelative`. Falls back to the raw string if it won't parse.
+    private func relativeISO(_ iso: String) -> String {
+        let parser = ISO8601DateFormatter()
+        guard let date = parser.date(from: iso) else { return iso }
+        let fmt = RelativeDateTimeFormatter()
+        fmt.unitsStyle = .full
+        return fmt.localizedString(for: date, relativeTo: Date())
     }
 
     private func caveatsCard(_ caveats: String) -> some View {

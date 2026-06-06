@@ -40,6 +40,7 @@ import Security
 ///   - `forks`          ⟵ `forks_count`
 ///   - `openIssues`     ⟵ `open_issues_count`
 ///   - `archived`       ⟵ `archived`
+///   - `archivedAt`     ⟵ `archived_at`
 ///   - `licenseSpdx`    ⟵ `license.spdx_id`
 ///   - `primaryLanguage`⟵ `language`
 ///   - `lastReleaseTag` / `lastReleaseDate` ⟵ `GET /repos/{o}/{r}/releases/latest`
@@ -54,6 +55,8 @@ public struct RepoStats: Sendable, Hashable {
     public var lastReleaseTag: String?
     public var lastReleaseDate: String?
     public var archived: Bool
+    /// `archived_at` from the repo payload, ISO 8601. Absent for live repos.
+    public var archivedAt: String?
     public var licenseSpdx: String?
     public var primaryLanguage: String?
 
@@ -66,6 +69,7 @@ public struct RepoStats: Sendable, Hashable {
         lastReleaseTag: String?,
         lastReleaseDate: String?,
         archived: Bool,
+        archivedAt: String?,
         licenseSpdx: String?,
         primaryLanguage: String?
     ) {
@@ -77,6 +81,7 @@ public struct RepoStats: Sendable, Hashable {
         self.lastReleaseTag = lastReleaseTag
         self.lastReleaseDate = lastReleaseDate
         self.archived = archived
+        self.archivedAt = archivedAt
         self.licenseSpdx = licenseSpdx
         self.primaryLanguage = primaryLanguage
     }
@@ -398,6 +403,7 @@ public struct GitHubService: Sendable {
             lastReleaseTag: releaseTag,
             lastReleaseDate: releaseDate,
             archived: (json["archived"] as? Bool) ?? false,
+            archivedAt: json["archived_at"] as? String,
             licenseSpdx: license?["spdx_id"] as? String,
             primaryLanguage: json["language"] as? String
         )

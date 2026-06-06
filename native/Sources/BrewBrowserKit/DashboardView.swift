@@ -180,6 +180,8 @@ struct CatalogFreshnessStrip: View {
 
 struct UpdatesCard: View {
     @Bindable var model: AppModel
+    /// Drives the curated multi-select upgrade sheet ("Choose…").
+    @State private var showUpgradeSheet = false
 
     var body: some View {
         GroupBox {
@@ -199,7 +201,7 @@ struct UpdatesCard: View {
                     Button("Update") { Task { await model.updateHomebrew() } }
                         .controlSize(.small)
                         .help("Run brew update to refresh package metadata")
-                    Button("Choose…") { model.openOutdatedInLibrary() }
+                    Button("Choose…") { showUpgradeSheet = true }
                         .controlSize(.small)
                     Button {
                         Task { await model.upgradeAll() }
@@ -246,6 +248,9 @@ struct UpdatesCard: View {
                 }
             }
             .padding(.top, 2)
+        }
+        .sheet(isPresented: $showUpgradeSheet) {
+            UpgradeSheet(model: model) { showUpgradeSheet = false }
         }
     }
 }
