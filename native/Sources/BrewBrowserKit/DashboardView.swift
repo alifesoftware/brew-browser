@@ -614,7 +614,11 @@ struct ExposureCard: View {
                         if exposure.unknown > 0 { sevCount(exposure.unknown, "unknown", .gray) }
                         Spacer()
                     }
-                    Text("\(exposure.vulnerablePackages) of \(model.totalPackages) installed packages have known vulnerabilities")
+                    // The severity chips count individual advisories (findings);
+                    // a package can have several — so spell out "N findings across
+                    // M of T packages" instead of letting the chips look like they
+                    // should sum to the package count.
+                    Text("\(exposure.total) finding\(exposure.total == 1 ? "" : "s") across \(exposure.vulnerablePackages) of \(model.totalPackages) installed packages")
                         .font(.callout).foregroundStyle(.secondary)
                     Button("View vulnerable packages →") {
                         model.openVulnerableInLibrary()
