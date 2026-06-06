@@ -37,7 +37,7 @@ struct AboutView: View {
                 } else {
                     Text("🍺").font(.system(size: 48))
                 }
-                Text("brew-browser").font(.title.weight(.semibold))
+                Text("Brew Browser").font(.title.weight(.semibold))
                 Text("A native macOS GUI for Homebrew.")
                     .font(.callout).foregroundStyle(.secondary)
             }

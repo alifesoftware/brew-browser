@@ -65,8 +65,8 @@ struct AppCommands: Commands {
         // mirrors the Tauri AboutModal. A "Sponsor brew-browser…" item sits below
         // so the donate CTA also lives in the app menu.
         CommandGroup(replacing: .appInfo) {
-            Button("About brew-browser") { model.aboutOpen = true }
-            Button("Sponsor brew-browser…") {
+            Button("About Brew Browser") { model.aboutOpen = true }
+            Button("Sponsor Brew Browser…") {
                 if let url = URL(string: AboutInfo.sponsorURL) {
                     NSWorkspace.shared.open(url)
                 }

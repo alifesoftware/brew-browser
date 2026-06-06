@@ -87,8 +87,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>brew-browser</string>
-    <key>CFBundleDisplayName</key><string>brew-browser</string>
+    <key>CFBundleName</key><string>Brew Browser</string>
+    <key>CFBundleDisplayName</key><string>Brew Browser</string>
     <key>CFBundleIdentifier</key><string>com.zerologic.brew-browser-native</string>
     <key>CFBundleExecutable</key><string>BrewBrowser</string>
     <key>CFBundlePackageType</key><string>APPL</string>
