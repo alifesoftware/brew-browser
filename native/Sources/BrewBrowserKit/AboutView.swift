@@ -18,11 +18,25 @@ struct AboutView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
+    /// The real app icon (bundled `AppIcon.icns`, loaded via `Bundle.module` —
+    /// same source as the Dock icon). Loaded once; falls back to the beer mark.
+    private static let appIcon: NSImage? = {
+        guard let url = Bundle.module.url(forResource: "AppIcon", withExtension: "icns") else { return nil }
+        return NSImage(contentsOf: url)
+    }()
+
     var body: some View {
         VStack(spacing: 20) {
             // Hero
             VStack(spacing: 6) {
-                Text("🍺").font(.system(size: 48))
+                if let icon = Self.appIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 72, height: 72)
+                } else {
+                    Text("🍺").font(.system(size: 48))
+                }
                 Text("brew-browser").font(.title.weight(.semibold))
                 Text("A native macOS GUI for Homebrew.")
                     .font(.callout).foregroundStyle(.secondary)
