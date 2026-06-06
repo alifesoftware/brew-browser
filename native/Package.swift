@@ -22,6 +22,13 @@ let package = Package(
         // scheme fails with DebugDylibNotEnabled (.xcodeproj-only setting).
         .library(name: "BrewBrowserKit", targets: ["BrewBrowserKit"])
     ],
+    dependencies: [
+        // Sparkle 2 — the standard self-updater for non-MAS macOS apps. Powers
+        // the native build's in-app update (Settings → Updates + the titlebar
+        // "update available" pill), mirroring the Tauri updater. Sole sanctioned
+        // third-party dependency; everything else is stock SwiftUI/AppKit.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+    ],
     targets: [
         // Thin executable: just the @main App entry, importing BrewBrowserKit.
         .executableTarget(
@@ -34,6 +41,11 @@ let package = Package(
         // `Bundle.module` readers (Categories.swift, Enrichment.swift).
         .target(
             name: "BrewBrowserKit",
+            dependencies: [
+                // The updater wrapper (UpdaterController.swift) wraps Sparkle's
+                // SPUStandardUpdaterController; the views read its @Observable state.
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/BrewBrowserKit",
             resources: [
                 .copy("Resources/categories.json"),

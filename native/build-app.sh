@@ -65,6 +65,23 @@ PLIST
   fi
 done
 
+# Sparkle.framework (Bundle C) — the self-updater. SPM emits it next to the
+# binary; the binary links it as `@rpath/Sparkle.framework/...`. Bundle it under
+# the standard Contents/Frameworks/ and add an @executable_path/../Frameworks
+# rpath so the assembled .app resolves it at launch (the bare `swift build`
+# binary already finds it via @loader_path next to itself in .build/).
+SPARKLE_FW="$BINDIR/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+  mkdir -p "$APP/Contents/Frameworks"
+  # -R preserves the framework's Versions symlink structure (codesign-required).
+  cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/Sparkle.framework"
+  # Add the Frameworks rpath if it isn't already present (install_name_tool errors
+  # on a duplicate, so guard on the existing LC_RPATH list).
+  if ! otool -l "$APP/Contents/MacOS/BrewBrowser" | grep -q "@executable_path/../Frameworks"; then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/BrewBrowser"
+  fi
+fi
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -82,6 +99,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <!-- Sparkle self-updater (Bundle C). Mirrors the Tauri updater: same PUBLIC
+         host, new path. The feed URL is safe to commit; the private build host
+         appears nowhere. -->
+    <key>SUFeedURL</key><string>https://brew-browser.zerologic.com/appcast.xml</string>
+    <!-- TODO(human): replace with the real Sparkle ed25519 PUBLIC key emitted by
+         `generate_keys` (the private key stays in the login Keychain, never
+         committed). Until this is the real key, Sparkle will refuse downloaded
+         updates (signature mismatch) — the Check-for-Updates UI still works. -->
+    <key>SUPublicEDKey</key><string>REPLACE_WITH_SPARKLE_ED25519_PUBLIC_KEY</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUScheduledCheckInterval</key><integer>86400</integer>
 </dict>
 </plist>
 PLIST

@@ -122,6 +122,45 @@ Native dest: new `UpgradeSheet.swift`; `PackageDetailView` GitHub card; `GitHubS
 - Gate every network feature on Offline Mode + its toggle (mirror Tauri).
 - No private host names in committed files.
 
+## Releasing native (Sparkle) — human-run steps
+
+Bundle C wired Sparkle 2 into the native build (`Package.swift` dep,
+`UpdaterController.swift`, the Settings → Updates tab, the titlebar pill, and the
+`SUFeedURL` / `SUPublicEDKey` / `SUEnableAutomaticChecks` / `SUScheduledCheckInterval`
+keys in `build-app.sh`'s Info.plist). The app builds + the UI works today; it just
+won't find updates until the feed is live. The remaining steps are operator-run and
+need the two secrets that can't be self-generated:
+
+1. **Generate the signing keypair (one-time).** Run Sparkle's `generate_keys`
+   (from the Sparkle release's `bin/`, or `swift run -c release --package-path
+   <Sparkle checkout> generate_keys`). It prints an ed25519 PUBLIC key and stores
+   the PRIVATE key in the login Keychain. Paste the public key into
+   `native/build-app.sh` — replace the `REPLACE_WITH_SPARKLE_ED25519_PUBLIC_KEY`
+   placeholder in the `SUPublicEDKey` value. NOTE: Tauri signs with minisign (its
+   `tauri.conf.json` pubkey); Sparkle uses ed25519 — the key does NOT carry over.
+   Never commit the private key.
+
+2. **Build + notarize the .app.** `native/build-app.sh release`, then codesign
+   with a Developer ID (the bundle now carries `Contents/Frameworks/Sparkle.framework`
+   — sign it too, e.g. `codesign --deep` or sign the framework first), `notarytool
+   submit`, `xcrun stapler staple`.
+
+3. **Zip + generate the appcast.** `zip` the notarized `.app` into a release dir,
+   then run Sparkle's `generate_appcast <dir>` over that dir. It signs each zip
+   with the private key and writes `appcast.xml` (channel: stable; the
+   `<sparkle:version>` etc. come from each build's Info.plist).
+
+4. **Host it (mirror the Tauri updater).** Serve `appcast.xml` + the notarized zip
+   from `brew-browser.zerologic.com` behind the same Caddy that fronts
+   `/enrichment/*` and `/trending-history/*`. Add a `handle_path /appcast.xml` (and
+   a static path for the zips) mirroring those existing blocks. Use ONLY the public
+   domain — the private build host stays out of every committed file. The app's
+   `SUFeedURL` already points at `https://brew-browser.zerologic.com/appcast.xml`.
+
+Two TODOs remain in the tree, both clearly marked in `native/build-app.sh`: the real
+`SUPublicEDKey` value (step 1) and the hosting/appcast generation (steps 3–4).
+
 ## Open questions for the user
 1. **Self-updater (C)**: full Sparkle, or UI + notify only (defer real self-update)?
+   → Resolved 2026-06-06: full Sparkle. Implemented in Bundle C.
 2. Anything in **Bundle F** you'd rather skip as non-native?

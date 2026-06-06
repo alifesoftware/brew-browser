@@ -20,7 +20,11 @@ public struct SettingsView: View {
     /// `openSettings()` makes Settings open to that pane.
     @AppStorage("settings.selectedTab") private var selected = SettingsTab.appearance.rawValue
 
-    public init() {}
+    /// The Sparkle updater, owned by the app scene and passed in so the Updates
+    /// tab's "Check now" / auto-check controls drive the shared instance (Bundle C).
+    private let updater: UpdaterController
+
+    public init(updater: UpdaterController) { self.updater = updater }
 
     public var body: some View {
         TabView(selection: $selected) {
@@ -32,7 +36,7 @@ public struct SettingsView: View {
                 .tabItem { Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right") }.tag(SettingsTab.github.rawValue)
             BrewSettings()
                 .tabItem { Label("Brew", systemImage: "mug") }.tag(SettingsTab.brew.rawValue)
-            UpdatesSettings()
+            UpdatesSettings(updater: updater)
                 .tabItem { Label("Updates", systemImage: "arrow.down.circle") }.tag(SettingsTab.updates.rawValue)
             VulnerabilitySettings()
                 .tabItem { Label("Security", systemImage: "shield") }.tag(SettingsTab.security.rawValue)
@@ -279,25 +283,67 @@ private struct BrewSettings: View {
 
 private struct UpdatesSettings: View {
     @State private var settings = AppSettings.shared
+    /// The shared Sparkle updater (Bundle C). `@Bindable` so the "Automatically
+    /// check" toggle can bind through to it and the view re-renders when its
+    /// observable state (canCheckForUpdates, lastUpdateCheckDate) changes.
+    @Bindable var updater: UpdaterController
+
+    /// Offline Mode gates the manual check — same posture as the Tauri "Check
+    /// now" button (`SettingsSectionUpdates.svelte:107`).
+    private var offline: Bool { settings.paranoidMode }
 
     var body: some View {
         Form {
+            // Check now — runs Sparkle's check, which presents the standard
+            // update UI if a newer build is on the feed. Disabled while a check
+            // is already in flight (canCheckForUpdates) or in Offline Mode.
             SwiftUI.Section {
-                Toggle("Auto-check daily", isOn: Binding(
-                    get: { settings.updateAutoCheck },
-                    set: { settings.updateAutoCheck = $0; try? settings.save() }
-                ))
-                Text("When on, brew-browser checks for a newer version once every 24 hours and shows a notice if one is available. Suspended while Offline Mode is on.")
+                HStack {
+                    Button {
+                        updater.checkForUpdates()
+                    } label: {
+                        Label("Check now", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(offline || !updater.canCheckForUpdates)
+                    Spacer()
+                    Text("Last checked: \(lastCheckedLabel)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if offline {
+                    Label("Offline Mode is on — manual update checks are blocked. Turn it off in Network to check the feed.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                } else {
+                    Text("Fetches brew-browser.zerologic.com/appcast.xml and compares the published version to the one you're running. No version number is sent.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            // Auto-check — binds Sparkle's automaticallyChecksForUpdates (its
+            // standard, persisted preference). Stays toggleable even in Offline
+            // Mode so the preference is set for the next time it's off, matching
+            // the Tauri auto-check toggle and every other network toggle.
+            SwiftUI.Section {
+                Toggle("Automatically check for updates", isOn: $updater.automaticallyChecksForUpdates)
+                Text("When on, brew-browser checks for a newer version once a day and shows a notice in the title bar if one is available. Suspended while Offline Mode is on.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
             SwiftUI.Section("Update channel") {
                 LabeledContent("Channel", value: "Stable")
-                Text("In-app install uses the signed update feed. (Native updater wiring — Sparkle — is the remaining piece for the native build.)")
+                Text("No beta channel in this release.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .padding(20)
+    }
+
+    /// Last-checked relative date ("2 hours ago"), or "Never" before the first
+    /// check. Mirrors the Tauri `lastCheckedLabel`.
+    private var lastCheckedLabel: String {
+        guard let date = updater.lastUpdateCheckDate else { return "Never" }
+        return date.formatted(.relative(presentation: .named))
     }
 }
 

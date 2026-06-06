@@ -21,10 +21,16 @@ public struct ContentView: View {
     /// scene-level `.commands` keyboard shortcuts drive the very same instance
     /// the views render. `@Bindable` here, `@State` at the owner.
     @Bindable var model: AppModel
+    /// The shared Sparkle updater (Bundle C) — drives the titlebar "update
+    /// available" pill below.
+    var updater: UpdaterController
     @Environment(\.openSettings) private var openSettings
     @Environment(\.scenePhase) private var scenePhase
 
-    public init(model: AppModel) { self.model = model }
+    public init(model: AppModel, updater: UpdaterController) {
+        self.model = model
+        self.updater = updater
+    }
 
     public var body: some View {
       VStack(spacing: 0) {
@@ -70,6 +76,21 @@ public struct ContentView: View {
                 .navigationTitle(model.selection.rawValue)
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
+                        // "Update available" pill (Bundle C) — mirrors the Tauri
+                        // UpdateIndicator. Shown only when Sparkle found a valid
+                        // update AND Offline Mode is off (network features stay
+                        // suppressed in Offline Mode). Click opens Sparkle's
+                        // standard update UI.
+                        if updater.updateAvailable && !AppSettings.shared.paranoidMode {
+                            Button {
+                                updater.checkForUpdates()
+                            } label: {
+                                Label("Update available", systemImage: "arrow.up.circle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                            .help("A newer version of brew-browser is available — click to update")
+                        }
+
                         Button {
                             Task { await model.refresh() }
                         } label: {

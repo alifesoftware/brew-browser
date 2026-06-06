@@ -17,9 +17,14 @@ struct BrewBrowserApp: App {
     /// instance. (SwiftUI's stock pattern for shared scene + command state.)
     @State private var model = AppModel()
 
+    /// The Sparkle updater, owned at the scene root for the app's lifetime so the
+    /// "Check for Updates…" menu item, the Settings → Updates tab, and the
+    /// titlebar "update available" pill all read one instance (Bundle C).
+    @State private var updater = UpdaterController()
+
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
+            ContentView(model: model, updater: updater)
         }
         .windowStyle(.automatic)
         // Native macOS toolbar style — the unified title bar that hosts the
@@ -34,13 +39,13 @@ struct BrewBrowserApp: App {
         // refresh, ⌘⇧L theme cycle. Stock `.commands` menus; the bound model is
         // the same one ContentView renders.
         .commands {
-            AppCommands(model: model)
+            AppCommands(model: model, updater: updater)
         }
 
         // Native Settings scene — opened by ⌘, the app menu, or the toolbar
         // gear (SettingsLink in ContentView). ⌘, is provided by SwiftUI.
         Settings {
-            SettingsView()
+            SettingsView(updater: updater)
         }
     }
 }
@@ -51,6 +56,8 @@ struct BrewBrowserApp: App {
 /// menu bar AND register the shortcuts. Async model calls are wrapped in `Task`.
 struct AppCommands: Commands {
     @Bindable var model: AppModel
+    /// The Sparkle updater backing the "Check for Updates…" menu item (Bundle C).
+    var updater: UpdaterController
 
     var body: some Commands {
         // Replace the stock "About brew-browser" menu item with one that opens
@@ -68,6 +75,16 @@ struct AppCommands: Commands {
                     NSWorkspace.shared.open(url)
                 }
             }
+        }
+
+        // "Check for Updates…" in its own group right after the About group
+        // (Bundle F replaces .appInfo itself, so we slot in `after: .appInfo` so
+        // both coexist). Disabled while a check is already in flight, per
+        // Sparkle's documented SwiftUI integration. Mirrors the Tauri "Check now"
+        // (`SettingsSectionUpdates.svelte`).
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { updater.checkForUpdates() }
+                .disabled(!updater.canCheckForUpdates)
         }
 
         // A dedicated "Go" menu hosts the section-nav shortcuts (⌘0–6) so they
