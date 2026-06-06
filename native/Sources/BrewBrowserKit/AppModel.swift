@@ -1354,13 +1354,12 @@ public final class AppModel {
         guard settings.vulnerabilityScanningAllowed else { return }
         guard !vulnScanAllLoading else { return }
         vulnScanAllLoading = true
-        defer {
-            vulnScanAllLoading = false
-            vulnLastScannedAt = Date()
-        }
+        defer { vulnScanAllLoading = false }
 
         // Ensure the helper is present so the sweep doesn't silently no-op into
         // an all-clean state (which would be a fake "no vulnerabilities" signal).
+        // If it's missing we do NOT mark the scan as done — the card stays in its
+        // "never scanned / Scan now" CTA rather than a false "clean" result.
         let installedHelper = await vulns.isBrewVulnsInstalled()
         brewVulnsInstalled = installedHelper
         guard installedHelper else { return }
@@ -1378,6 +1377,38 @@ public final class AppModel {
         // Replace wholesale so a package uninstalled mid-sweep drops out of the
         // index rather than lingering as a stale finding.
         vulnIndex = index
+        vulnLastScannedAt = Date()
+        // Persist so the result survives relaunch — the Exposure card shows the
+        // last scan instantly instead of re-scanning the whole install at every
+        // launch (a multi-minute sweep). Re-scan is user-initiated ("Scan now").
+        persistVulns()
+    }
+
+    // MARK: - Vulnerability persistence (UserDefaults)
+
+    private static let vulnIndexKey = "vuln.index.v1"
+    private static let vulnScannedAtKey = "vuln.scannedAt.v1"
+
+    /// Persist the install-wide scan rollup + timestamp. Best-effort.
+    private func persistVulns() {
+        if let data = try? JSONEncoder().encode(vulnIndex) {
+            UserDefaults.standard.set(data, forKey: Self.vulnIndexKey)
+        }
+        if let at = vulnLastScannedAt {
+            UserDefaults.standard.set(at.timeIntervalSince1970, forKey: Self.vulnScannedAtKey)
+        }
+    }
+
+    /// Load the last persisted scan at launch so the Exposure card + Library
+    /// dots show immediately without re-scanning. `scanVulnsIfNeeded` then no-ops
+    /// (lastScannedAt is set); a fresh scan only happens on explicit "Scan now".
+    func loadVulns() {
+        if let data = UserDefaults.standard.data(forKey: Self.vulnIndexKey),
+           let idx = try? JSONDecoder().decode([String: VulnSummary].self, from: data) {
+            vulnIndex = idx
+        }
+        let ts = UserDefaults.standard.double(forKey: Self.vulnScannedAtKey)
+        if ts > 0 { vulnLastScannedAt = Date(timeIntervalSince1970: ts) }
     }
 
     /// Canonical advisory URL for a finding — the first HTTPS reference if the

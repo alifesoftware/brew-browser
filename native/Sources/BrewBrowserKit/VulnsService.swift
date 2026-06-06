@@ -10,7 +10,7 @@ import Foundation
 /// deliberately NOT used to decode the wire format — `brew vulns`
 /// ships UPPERCASE strings (`"CRITICAL"`, `"MODERATE"`, …). See
 /// ``init(wire:)`` for the case-folding mapper (GOTCHA #2).
-enum VulnSeverity: String, Sendable, Comparable {
+enum VulnSeverity: String, Sendable, Comparable, Codable {
     case critical
     case high
     case medium
@@ -82,7 +82,7 @@ struct VulnFinding: Identifiable, Sendable, Hashable {
 /// list of findings. Useful for the sidebar badge tone, dashboard
 /// exposure bar, and per-row dot — the native analogues of the
 /// frontend `SeverityCounts` rollup.
-struct VulnSummary: Sendable, Hashable {
+struct VulnSummary: Sendable, Hashable, Codable {
     var critical = 0
     var high = 0
     var medium = 0

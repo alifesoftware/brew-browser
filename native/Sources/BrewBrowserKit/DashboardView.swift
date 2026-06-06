@@ -607,9 +607,10 @@ struct ExposureCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 2)
         }
-        // Lazy first scan on first appearance (mirrors the Tauri exposure
-        // card's scanIfNeeded). No-op once scanned or if disabled.
-        .task { await model.scanVulnsIfNeeded() }
+        // No auto-scan on appear: a full install-wide sweep is multi-minute, so
+        // launching straight into "Scanning…" every time is the wrong default.
+        // The card shows the last persisted result (loaded at launch) or a
+        // "Scan now" CTA; scanning is user-initiated via the header button.
     }
 
     /// One severity count chip — bold number + lowercase label, toned by color.

@@ -208,6 +208,7 @@ public struct ContentView: View {
       .overlay { ToastOverlay(model: model) }
       .task {
             model.loadJobs()
+            model.loadVulns()
             if model.installed.isEmpty { await model.loadLibrary() }
       }
       // ⌘K command palette — stock `.sheet` overlay (BrewBrowserApp's .commands
