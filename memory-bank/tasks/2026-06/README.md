@@ -15,4 +15,6 @@ PRs #41/#42/#43).
 | 04 | [Native: close inspector when the section changes](./04-native-detail-autoclose-on-section-change.md) | 2026-06-04 | `24545ed` |
 | 05 | [Native: validate snapshot id before path join (parity with Tauri PR #46)](./05-native-snapshot-id-validation.md) | 2026-06-04 | `28c378e` |
 | 06 | [Native dashboard load perf (actor→struct, ungated load)](./06-native-dashboard-load-perf.md) | 2026-06-04 | (this commit) |
-| 07 | [Native GitHub toolbar chip + dashboard card + one-prompt keychain](./07-native-github-toolbar-card-oneprompt.md) | 2026-06-05 | (this commit) |
+| 07 | [Native GitHub toolbar chip + dashboard card + one-prompt keychain](./07-native-github-toolbar-card-oneprompt.md) | 2026-06-05 | `fbf6aad` |
+| 08 | [Native Activity parity (+ Tauri mirror)](./08-native-activity-parity.md) | 2026-06-06 | (this commit) |
+| 09 | [Native ← Tauri parity roadmap (remaining gap)](./09-native-parity-roadmap.md) | 2026-06-06 | (planning doc) |
