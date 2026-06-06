@@ -103,11 +103,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
          host, new path. The feed URL is safe to commit; the private build host
          appears nowhere. -->
     <key>SUFeedURL</key><string>https://brew-browser.zerologic.com/appcast.xml</string>
-    <!-- TODO(human): replace with the real Sparkle ed25519 PUBLIC key emitted by
-         `generate_keys` (the private key stays in the login Keychain, never
-         committed). Until this is the real key, Sparkle will refuse downloaded
-         updates (signature mismatch) — the Check-for-Updates UI still works. -->
-    <key>SUPublicEDKey</key><string>REPLACE_WITH_SPARKLE_ED25519_PUBLIC_KEY</string>
+    <!-- Sparkle ed25519 PUBLIC key (from `generate_keys`). Public by design —
+         it ships in every app and only VERIFIES updates; the matching PRIVATE
+         key lives in the maintainer's login Keychain and signs releases. Like
+         the Tauri minisign pubkey in tauri.conf.json, it's safe to commit. -->
+    <key>SUPublicEDKey</key><string>OoRc2WZfiHX21nhhm/inmv5l282Ob97GBwx+fZoML/E=</string>
     <key>SUEnableAutomaticChecks</key><true/>
     <key>SUScheduledCheckInterval</key><integer>86400</integer>
 </dict>
