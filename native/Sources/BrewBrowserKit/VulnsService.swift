@@ -256,7 +256,10 @@ struct VulnsService: Sendable {
         }
 
         let records = try Self.parseScanOutput(result.stdout)
-        return records.flatMap { $0.findings }
+        // brew vulns IGNORES --formula and returns the whole install set, so we
+        // must keep only the requested formula's record — otherwise the detail
+        // card shows every other package's CVEs (boost/icu/jxl/…) under this one.
+        return records.first(where: { $0.formula == name })?.findings ?? []
     }
 
     /// Scan the WHOLE install set in ONE `brew vulns --json` call (no

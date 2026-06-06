@@ -1465,18 +1465,6 @@ public final class AppModel {
         return nil
     }
 
-    /// True when the detail package has at least one finding whose `fixedIn`
-    /// version is newer than what's installed — i.e. an upgrade would clear a
-    /// known advisory. Drives the Security card's "Upgrade to fix" button.
-    /// Mirrors the Tauri `securityUpgradeAvailable`.
-    var detailSecurityUpgradeAvailable: Bool {
-        guard let installed = detailPackage?.version, !installed.isEmpty else { return false }
-        return detailVulns.contains { finding in
-            guard let fixed = finding.fixedIn else { return false }
-            return Self.versionLessThan(installed, fixed)
-        }
-    }
-
     /// Naïve dot/dash-segment version compare — true when `a` is strictly older
     /// than `b`. Good enough for brew's mostly-semver tags; degrades to "show
     /// the upgrade button" (false-positive bias) on odd suffixes. Mirrors the

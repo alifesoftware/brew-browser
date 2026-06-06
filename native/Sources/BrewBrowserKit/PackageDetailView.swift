@@ -276,19 +276,9 @@ struct PackageDetailView: View {
                     Label("No known vulnerabilities", systemImage: "checkmark.seal.fill")
                         .foregroundStyle(.green)
                 } else {
-                    // "Upgrade to fix" — only when an upgrade would actually
-                    // clear a finding (installed < a finding's fixedIn). Reuses
-                    // the footer's upgrade pipeline.
-                    if model.detailSecurityUpgradeAvailable {
-                        Button {
-                            Task { await model.upgradeDetail() }
-                        } label: {
-                            Label("Upgrade to fix", systemImage: "arrow.up.circle")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .help("Run brew upgrade for this package to clear known advisories")
-                    }
+                    // No "Upgrade to fix" here — it duplicates the footer's
+                    // Upgrade CTA (a fixable advisory means the package is
+                    // outdated, so the footer already offers Upgrade).
                     ForEach(model.detailVulns) { v in
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {

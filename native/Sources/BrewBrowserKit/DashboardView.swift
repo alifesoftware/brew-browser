@@ -244,9 +244,18 @@ struct UpdatesCard: View {
                                 .frame(width: 200, alignment: .trailing)
                         }
                         .contentShape(.rect)
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 8)
+                        // Keep the row highlighted while its detail inspector is
+                        // open (the list has no Table selection of its own).
+                        .background(
+                            model.showDetail && model.detailPackage?.name == p.name
+                                ? AnyShapeStyle(.selection)
+                                : AnyShapeStyle(.clear),
+                            in: .rect(cornerRadius: 6)
+                        )
                     }
                     .buttonStyle(.plain)
-                    .padding(.vertical, 7)
                     if p.id != model.outdatedPreview.last?.id { Divider() }
                 }
 
