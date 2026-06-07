@@ -1,9 +1,20 @@
 # Active Context
 
-> ## 🚀 Active branch: `feat/launch-batch-progress-category-upgrade` (updated 2026-06-07)
+> ## 🚀 SHIPPED 2026-06-07: Tauri 0.5.1 + native 0.1.0 (first native release)
+>
+> Both builds signed, notarized, released (tag `v0.5.1` on `main`); Tauri updater
+> + native Sparkle feed live; cask bumped; **keychain sign-in verified on the
+> signed build.** Everything below is now merged/shipped. Next deploy: see the
+> runbook + gotchas in `tasks/2026-06/12-release-v0.5.1-native-0.1.0.md`.
+> Open backlog: 6 Reddit feature requests (unfiled), catalog-from-brew-cache
+> hybrid (roadmap), docs/landing brand still "Brew Browser".
+>
+> ---
+>
+> ## Prior: launch batch (PR #60, merged) — both builds
 >
 > Off `main` (which now contains the native app + #51, merged via #56). This
-> branch is the **launch batch, both builds** — pending commit/PR:
+> branch was the **launch batch, both builds**:
 > - **Upgrade-all firehose fix** (non-fatal `brew upgrade` exits = success;
 >   closes ~20 issues), **#58** (category click → Library), **#57** (progress
 >   counts). All in Tauri + native.

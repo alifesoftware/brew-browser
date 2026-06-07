@@ -28,6 +28,7 @@ Native macOS build under `native/`.
 | # | Task | Date | Branch |
 |---|---|---|---|
 | 11 | [Launch batch: upgrade-all fix + #58 + #57, native test target, security pass](./11-launch-batch-progress-category-upgrade.md) | 2026-06-07 | `feat/launch-batch-progress-category-upgrade` |
+| 12 | [Release: Tauri 0.5.1 + native 0.1.0 (first native release) — SHIPPED](./12-release-v0.5.1-native-0.1.0.md) | 2026-06-07 | `v0.5.1` tag / `main` |
 
 ## Tauri track (`main`)
 

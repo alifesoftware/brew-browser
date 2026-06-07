@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-06-07 — 🚀 SHIPPED: Tauri 0.5.1 + native 0.1.0 (first native release)
+
+- ✅ Both builds **signed, notarized, released** together (tag `v0.5.1`). 5 assets on the GitHub release: Tauri `.dmg` + `.app.tar.gz`(+sig), native `.dmg` + `.zip`.
+- ✅ Tauri in-app updater live (`updater.json` → 0.5.1); native Sparkle feed live (`appcast.xml` → 0.1.0); cask bumped to 0.5.1.
+- ✅ **GUI keychain smoke test PASSED on the signed build** — sign-in persists; the combined-credential fix is verified end-to-end.
+- Deploy gotchas captured for next time (Sparkle appcast cache, gh asset naming, CDN lag, native dual-channel). See `tasks/2026-06/12-*`.
+
 ## 2026-06-07 (cont.) — post-batch fixes: GitHub keychain, launch hydration, name revert, catalog refresh
 
 - ✅ **GitHub sign-in fixed** — ported native's **combined Keychain item** (`github_credential_v1`) to Tauri: one access = one prompt; status hydrates after sign-in (the #37 batch silently skipped consent-required items). Legacy 3-item layout migrates in; no re-login. 110 github tests pass.
