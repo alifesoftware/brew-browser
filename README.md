@@ -72,7 +72,11 @@ and parity rules: `memory-bank/decisions.md` (2026-06-01 "keep both" ADR).
 
 ## Install (end users)
 
-**Direct download (recommended):** grab the latest signed + notarized `.dmg` from the [releases page](https://github.com/msitarzewski/brew-browser/releases/latest), open it, and drag **brew-browser** to your Applications folder. No Gatekeeper warning. This is the build that's signed and tested directly each release, and it keeps you on the app's own verified updater (Settings → Network → Updates).
+Both builds ship on the **[latest release](https://github.com/msitarzewski/brew-browser/releases/latest)**, signed + notarized — no Gatekeeper warning. Apple Silicon.
+
+### Tauri build — macOS 13+ (the cross-platform one)
+
+**Direct download:** grab **`brew-browser_<version>_aarch64.dmg`** from the [latest release](https://github.com/msitarzewski/brew-browser/releases/latest), open it, and drag **brew-browser** to Applications. Keeps you on the app's own verified updater (Settings → Network → Updates).
 
 **Homebrew:**
 
@@ -81,9 +85,11 @@ brew tap msitarzewski/brew-browser
 brew install --cask brew-browser
 ```
 
-Installs the same notarized `.dmg`. Update later with `brew upgrade --cask brew-browser`.
+Installs the same notarized `.dmg`; update later with `brew upgrade --cask brew-browser`.
 
-Apple Silicon only for now. macOS 13 (Ventura) or newer.
+### Native build — macOS 26 (Tahoe) · Swift / SwiftUI
+
+**Direct download:** grab **`BrewBrowser-<version>.dmg`** from the [latest release](https://github.com/msitarzewski/brew-browser/releases/latest), open it, and drag **Brew Browser** to Applications. It keeps itself current via the in-app Sparkle updater. (Requires macOS 26.)
 
 ## Build from source
 

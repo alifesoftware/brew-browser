@@ -73,10 +73,30 @@ xcrun stapler staple "$APP"
 rm -f "$ZIP"                       # re-zip so the download carries the ticket
 ditto -c -k --keepParent "$APP" "$ZIP"
 
+# Disk image for FIRST-INSTALL download (humans prefer a .dmg; Sparkle uses the
+# .zip above for auto-updates). Built from the stapled .app, staged with an
+# /Applications symlink for drag-to-install, then Developer-ID signed +
+# notarized + stapled — same treatment as the Tauri build's .dmg.
+DMG="$OUT_DIR/BrewBrowser-$VERSION.dmg"
+echo "==> dmg $DMG"
+STAGE="$(mktemp -d)"
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+rm -f "$DMG"
+hdiutil create -volname "Brew Browser" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+rm -rf "$STAGE"
+codesign --force --timestamp --sign "$DEVELOPER_ID_APP" "$DMG"
+echo "==> notarize dmg (waits for Apple)"
+xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+xcrun stapler staple "$DMG"
+
 echo "==> generate appcast (signs with the Sparkle private key in your Keychain)"
 "$SPARKLE_BIN/generate_appcast" --download-url-prefix "$DOWNLOAD_URL_PREFIX" "$OUT_DIR"
 
 echo
-echo "==> done. Upload these to the path behind $DOWNLOAD_URL_PREFIX:"
+echo "==> done."
+echo "   Upload to the host (path behind $DOWNLOAD_URL_PREFIX) — Sparkle auto-update feed:"
 ls -1 "$OUT_DIR"/BrewBrowser-*.zip "$OUT_DIR/appcast.xml"
 echo "   (appcast.xml must be served at the SUFeedURL in build-app.sh's Info.plist)"
+echo "   Attach to the GitHub release (first-install download):"
+ls -1 "$OUT_DIR"/BrewBrowser-*.dmg
