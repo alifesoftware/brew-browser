@@ -1,5 +1,14 @@
 # Progress
 
+## 2026-06-07 (cont.) — post-batch fixes: GitHub keychain, launch hydration, name revert, catalog refresh
+
+- ✅ **GitHub sign-in fixed** — ported native's **combined Keychain item** (`github_credential_v1`) to Tauri: one access = one prompt; status hydrates after sign-in (the #37 batch silently skipped consent-required items). Legacy 3-item layout migrates in; no re-login. 110 github tests pass.
+- ✅ **Launch hydration** — `+layout` loads the vuln cache + GitHub status on startup so the Dashboard cards / sidebar badges populate on first paint (were empty every launch).
+- ✅ **Tauri name reverted** to `brew-browser` (so shipped users keep Keychain + window state across auto-update); native stays "Brew Browser".
+- ✅ **Bundled catalog refreshed** (`tools/catalog/fetch.py`) — as_of today, 8404 formulae / 7703 casks; synced byte-identical to both builds.
+- 🧠 **Key finding:** keychain "won't stick" + repeated prompts is a **`tauri dev` identity-churn artifact**, not a code bug — verify persistence on a *signed* build. See `decisions.md` 2026-06-07 + `tasks/2026-06/11-*`.
+- ↩️ Deferred (roadmap): read Homebrew's own `~/Library/Caches/Homebrew/api` catalog instead of bundling ours (JWS + brew-internal-format coupling — a real refactor).
+
 ## 2026-06-07 — launch batch (both builds): firehose fix + #58 + #57 + native tests + security pass
 
 - ✅ **Upgrade-all firehose fixed** — `brew upgrade` exits 1 on non-fatal warnings; both builds now classify those as success (no "Upgrade-all failed" toast / report CTA). Closes ~20 issues. `upgrade_warnings_only` (Rust) / `BrewOutputParsing` (Swift), tested.

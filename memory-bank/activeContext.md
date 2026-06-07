@@ -14,10 +14,19 @@
 > - **Docs + landing** rewritten for **both builds** (README/SECURITY/CONTRIBUTING +
 >   Hall of fame for @neodave/#46); new dashboard screenshots; **landing page
 >   published live** to brew-browser.zerologic.com (rsync, no `--delete`).
-> - QA: `cargo test` green, `npm run check` 0 errors, `swift build` + `swift test`
->   (36) green. Runtime/MITM tests deferred (hands-on).
-> - **Next:** PR `feat/launch-batch…` → `main`; then native notarization deploy.
-> - Filed #57/#58; six more Reddit feature requests triaged, NOT yet filed.
+> - **Post-batch fixes (commits `57f6f5f`…):** GitHub keychain → ONE combined
+>   item (`github_credential_v1`, ported from native; one prompt, status
+>   hydrates); launch hydration of vuln cache + GitHub status; Tauri name
+>   reverted to `brew-browser`; bundled catalog refreshed (as_of 2026-06-07).
+> - **Keychain "won't stick" was `tauri dev` identity churn** — verify
+>   persistence on a SIGNED build, not dev. See `decisions.md` 2026-06-07.
+> - QA: `cargo test` green (110 github), `npm run check` 0 errors, `swift test`
+>   36 green. Runtime/MITM + signed-build keychain smoke test still pending.
+> - **Next: merge PR #60 → main, then BUILD + DEPLOY** (Tauri 0.5.1 sign+notarize;
+>   native first notarized release via `release.sh`). Smoke-test sign-in
+>   persistence on the signed build before shipping.
+> - Filed #57/#58; six Reddit feature requests triaged, NOT yet filed. Deferred
+>   roadmap: catalog-from-brew-cache hybrid; docs/landing brand still "Brew Browser".
 > - Build host: ssh `umacbookpro` (see auto-memory [[reference-build-host]]) — one
 >   web root serves landing + `updater.json`; never `rsync --delete` it.
 >

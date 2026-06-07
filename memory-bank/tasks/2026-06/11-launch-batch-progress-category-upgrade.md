@@ -79,8 +79,32 @@ Tools: cargo audit, npm audit, osv-scanner, gitleaks, semgrep + manual review.
   `--delete` from `landing/` would wipe the Tauri updater). Host genericized out
   of the committed file. Build-host details live in auto-memory only.
 
+## Post-batch fixes (GitHub keychain, hydration, naming, catalog) — `57f6f5f`…
+Driven by a long debugging session on "GitHub login / window size / vulns don't
+persist; asks for the password 3×."
+- **Root cause of the prompt churn:** running `npm run tauri dev` — an unsigned
+  binary whose code identity changes each rebuild → macOS Keychain re-prompts and
+  login won't stick. Not a code bug; verify persistence on a SIGNED build.
+- **Real code bug found + fixed:** the #37 `kSecMatchLimitAll` batch read silently
+  skips consent-required items → status read empty after a successful sign-in
+  ("signed in but Settings don't update"). Ported native's **combined Keychain
+  item** (`github_credential_v1`, token+username+scopes as one JSON) to Tauri:
+  one access = one prompt; legacy 3-item layout migrates in; writes
+  delete-then-recreate. (`auth.rs`; 110 github tests.)
+- **Launch hydration:** `+layout` now loads the vuln cache + GitHub status on
+  startup (gated on toggles) so the Dashboard cards + sidebar badges populate on
+  first paint.
+- **Tauri name reverted** to `brew-browser` (rename → bundle change → shipped
+  users lose Keychain/window-state on update). Native keeps "Brew Browser".
+- **Bundled catalog refreshed** via `tools/catalog/fetch.py` (as_of 2026-06-07,
+  8404 formulae / 7703 casks), synced byte-identical to `src-tauri/data/catalog`
+  + `native/.../Resources/catalog`.
+- **Reverse-parity lesson:** the combined-credential fix originated on native and
+  never flowed back — closed now. Catalog-from-brew-cache is a deferred roadmap
+  item (`decisions.md` 2026-06-07).
+
 ## Outcome
 `cargo check` clean, `cargo test` green, `npm run check` 0 errors, `swift build`
 clean, `swift test` 36 pass. Filed #57 + #58 (crediting Reddit requesters).
 Six more Reddit feature requests triaged but NOT filed (awaiting go-ahead).
-Landing page live with both builds.
+Landing page live with both builds. PR #60 → main.
