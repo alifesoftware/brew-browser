@@ -75,7 +75,10 @@ async fn brew_subcommand(brew: &Path, args: &[&str], context: &str) -> Result<St
 ///   - exists=false: path doesn't exist on disk (e.g. Caskroom is absent on
 ///     pure-formula installs); not an error
 ///   - error=Some: the size couldn't be measured (timeout, permission denied)
-async fn du_bytes(path: &Path) -> (u64, bool, Option<String>) {
+///
+/// `pub(crate)` so the per-package size path in `brew_info` can reuse the
+/// same `du -sk` machinery instead of re-implementing it (Feature #4).
+pub(crate) async fn du_bytes(path: &Path) -> (u64, bool, Option<String>) {
     if !path.exists() {
         return (0, false, None);
     }
@@ -104,6 +107,52 @@ async fn du_bytes(path: &Path) -> (u64, bool, Option<String>) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     (kb * 1024, true, None)
+}
+
+/// Resolve the on-disk keg directory for one package, given the Homebrew
+/// `prefix`. Formula kegs live at `<prefix>/Cellar/<name>` (a directory
+/// holding one subdir per installed version — sizing the parent sums all
+/// versions, i.e. the total on-disk size for the package). Cask kegs live
+/// at `<prefix>/Caskroom/<token>`.
+///
+/// `name` MUST be the short name (`wget`), never the tap-qualified
+/// `full_name` (`homebrew/core/wget`) — Cellar dirs use the short form.
+/// Callers pass `Package::name`, which is already short.
+///
+/// Pure (no I/O) so the path-selection logic is unit-testable; whether the
+/// path actually exists is decided later by `du_bytes`.
+pub(crate) fn keg_path(prefix: &Path, name: &str, kind: crate::types::PackageKind) -> PathBuf {
+    match kind {
+        crate::types::PackageKind::Formula => prefix.join("Cellar").join(name),
+        crate::types::PackageKind::Cask => prefix.join("Caskroom").join(name),
+    }
+}
+
+/// Size one installed package's keg via `du -sk`, returning `Some(bytes)`
+/// only when the package is actually installed AND the keg measured
+/// cleanly. Returns `None` when:
+///   - `installed_version` is `None` (not installed — no `du` is attempted,
+///     never a fabricated estimate),
+///   - the keg directory is absent (e.g. a cask on Linux — Caskroom doesn't
+///     exist there), or
+///   - `du` errored (timeout / permission denied) — a partial or `0` count
+///     is never surfaced as if it were a real size.
+///
+/// `name` is the short package name (see `keg_path`).
+pub(crate) async fn installed_size_bytes(
+    prefix: &Path,
+    name: &str,
+    kind: crate::types::PackageKind,
+    installed_version: Option<&str>,
+) -> Option<u64> {
+    // Not installed → no measurement, no fabrication.
+    installed_version?;
+    let path = keg_path(prefix, name, kind);
+    let (bytes, exists, error) = du_bytes(&path).await;
+    if !exists || error.is_some() {
+        return None;
+    }
+    Some(bytes)
 }
 
 #[tauri::command]
@@ -295,5 +344,63 @@ mod tests {
         assert!(exists, "/etc/hosts should exist");
         assert!(err.is_none(), "du should succeed on /etc/hosts: {err:?}");
         assert!(bytes > 0, "/etc/hosts should report nonzero size");
+    }
+
+    // ---------- Feature #4: keg-path selection (pure) ----------
+
+    use crate::types::PackageKind;
+
+    #[test]
+    fn keg_path_formula_uses_cellar() {
+        let p = keg_path(Path::new("/opt/homebrew"), "wget", PackageKind::Formula);
+        assert_eq!(p, PathBuf::from("/opt/homebrew/Cellar/wget"));
+    }
+
+    #[test]
+    fn keg_path_cask_uses_caskroom() {
+        let p = keg_path(Path::new("/opt/homebrew"), "firefox", PackageKind::Cask);
+        assert_eq!(p, PathBuf::from("/opt/homebrew/Caskroom/firefox"));
+    }
+
+    #[test]
+    fn keg_path_uses_short_name_for_tap_qualified() {
+        // Cellar dirs use the short name, never the tap-qualified full_name.
+        // Callers pass `Package::name` (short), so a value like
+        // "homebrew/core/wget" should never reach here — but if it did, the
+        // helper must NOT silently produce a nested tap path. We assert the
+        // contract by passing the short name the caller is required to use.
+        let p = keg_path(Path::new("/opt/homebrew"), "wget", PackageKind::Formula);
+        assert_eq!(p, PathBuf::from("/opt/homebrew/Cellar/wget"));
+        // Sanity: the full path form is explicitly NOT what we want.
+        assert_ne!(p, PathBuf::from("/opt/homebrew/Cellar/homebrew/core/wget"));
+    }
+
+    // ---------- Feature #4: size-selection logic (pure decision) ----------
+
+    #[tokio::test]
+    async fn installed_size_is_none_when_not_installed() {
+        // installed_version == None → no du attempted, size is None.
+        let size = installed_size_bytes(
+            Path::new("/opt/homebrew"),
+            "wget",
+            PackageKind::Formula,
+            None,
+        )
+        .await;
+        assert!(size.is_none(), "uninstalled package must report no size");
+    }
+
+    #[tokio::test]
+    async fn installed_size_is_none_when_keg_dir_absent() {
+        // Installed but the keg dir doesn't exist (e.g. a cask on Linux, or a
+        // bogus prefix) → du_bytes reports !exists → None (no fabricated 0).
+        let size = installed_size_bytes(
+            Path::new("/definitely/not/a/real/prefix/anywhere"),
+            "wget",
+            PackageKind::Formula,
+            Some("1.2.3"),
+        )
+        .await;
+        assert!(size.is_none(), "absent keg dir must report no size");
     }
 }

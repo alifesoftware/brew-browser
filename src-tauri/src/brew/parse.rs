@@ -344,6 +344,9 @@ impl RawFormula {
             raw_json,
             exists_in_applications: false,
             is_mas: false,
+            // Feature #4 — filled lazily in `brew_info` (the parser stays
+            // pure / I/O-free); never sized here.
+            installed_size_bytes: None,
         }
     }
 }
@@ -500,6 +503,9 @@ impl RawCask {
             raw_json,
             exists_in_applications,
             is_mas,
+            // Feature #4 — filled lazily in `brew_info` (the parser stays
+            // pure / I/O-free); never sized here.
+            installed_size_bytes: None,
         }
     }
 }

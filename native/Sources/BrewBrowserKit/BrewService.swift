@@ -549,6 +549,12 @@ struct PackageInfo: Sendable, Hashable {
     /// bundled catalog never has. Drives the detail panel's deprecation notice.
     /// Mirrors the Tauri `Package` deprecation fields. Default clean.
     var deprecation: DeprecationStatus = DeprecationStatus()
+    /// On-disk size of the installed keg in bytes, from `du -sk` on
+    /// `<prefix>/Cellar/<name>` (formula, all versions) or
+    /// `<prefix>/Caskroom/<token>` (cask). nil when the package isn't installed
+    /// or du fails — never fabricated. Computed lazily in `info()`, not by the
+    /// static parsers. Mirrors the Tauri `installed_size_bytes` field (feature #4).
+    var installedSizeBytes: Int64? = nil
 
     var isOutdated: Bool {
         guard let i = installedVersion, let s = stableVersion else { return outdated }
@@ -572,11 +578,31 @@ extension BrewService {
             throw BrewError.nonZeroExit(code: -1, stderr: "No \(arrayKey) entry for \(name)")
         }
 
-        if kind == .cask {
-            return Self.parseCask(obj)
-        } else {
-            return Self.parseFormula(obj)
+        var parsed = kind == .cask ? Self.parseCask(obj) : Self.parseFormula(obj)
+
+        // Lazily size the installed keg (feature #4). Only when the package is
+        // actually installed — a non-installed package gets nil (no du, no
+        // fabricated estimate). Reuses `dirSizeBytes` (the `du -sk` helper) on
+        // the resolved keg dir. Formula: Cellar/<short-name> (all versions);
+        // cask: Caskroom/<token>. Short name (not full tap path) per layout.
+        if parsed.installedVersion != nil {
+            let prefix = await prefix()
+            let kegPath = Self.kegPath(prefix: prefix, name: parsed.name, kind: kind)
+            parsed.installedSizeBytes = await dirSizeBytes(kegPath)
         }
+        return parsed
+    }
+
+    /// Resolve the on-disk keg directory for a package. Formula kegs live at
+    /// `<prefix>/Cellar/<short-name>` (a dir of per-version subdirs — sizing the
+    /// parent sums all installed versions); cask kegs at
+    /// `<prefix>/Caskroom/<token>`. Always uses the short name (the last path
+    /// component) so tap-qualified names like `homebrew/core/wget` map to
+    /// `Cellar/wget`, not the full tap path. Mirrors the Tauri keg-path logic.
+    static func kegPath(prefix: String, name: String, kind: InstalledPackage.Kind) -> String {
+        let short = name.split(separator: "/").last.map(String.init) ?? name
+        let sub = kind == .cask ? "Caskroom" : "Cellar"
+        return "\(prefix)/\(sub)/\(short)"
     }
 
     // Internal (not private) so `BrewOutputParsingTests` can feed these the same

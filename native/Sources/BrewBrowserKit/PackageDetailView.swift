@@ -217,9 +217,29 @@ struct PackageDetailView: View {
             if let tap = info?.tap {
                 Divider(); metaRow("Tap", tap, mono: true)
             }
+            // On-disk size of the installed keg (feature #4). Rendered only when
+            // the package is installed and du succeeded — nil → no row (never a
+            // fabricated "0 B"). Lazily computed in BrewService.info().
+            if let bytes = info?.installedSizeBytes {
+                Divider(); metaRow("Size", Self.human(bytes))
+            }
         }
         .padding(12)
         .background(.quaternary, in: .rect(cornerRadius: 10))
+    }
+
+    /// Human byte formatting for the Size row — matches the Tauri Dashboard
+    /// `fmtBytes` thresholds EXACTLY for cross-shell parity: B (<1 KiB),
+    /// KB (1 decimal), MB (1 decimal), GB (2 decimals). Distinct from
+    /// `StorageCard.human`, which floors to whole MB and skips KB/B — the detail
+    /// panel needs the finer granularity (parity contract #4).
+    static func human(_ bytes: Int64) -> String {
+        let b = Double(bytes)
+        let kib = 1024.0, mib = 1_048_576.0, gib = 1_073_741_824.0
+        if b >= gib { return String(format: "%.2f GB", b / gib) }
+        if b >= mib { return String(format: "%.1f MB", b / mib) }
+        if b >= kib { return String(format: "%.1f KB", b / kib) }
+        return "\(bytes) B"
     }
 
     private func metaRow(_ label: String, _ value: String, mono: Bool = false) -> some View {

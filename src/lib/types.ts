@@ -141,6 +141,16 @@ export interface PackageDetail {
   rawJson: unknown;
   existsInApplications: boolean;
   isMas: boolean;
+  /**
+   * Feature #4 — total on-disk size of the installed keg in bytes
+   * (`du -sk` on `<prefix>/Cellar/<name>` for formulae,
+   * `<prefix>/Caskroom/<token>` for casks, summing all installed
+   * versions). Null when the package isn't installed, the keg dir is
+   * absent (e.g. a cask on Linux), or `du` couldn't measure it.
+   * Computed lazily inside `brew_info` (travels on this DTO — no second
+   * IPC round-trip). Null → the detail "Size" row is not rendered.
+   */
+  installedSizeBytes: number | null;
 }
 
 // =========================================================

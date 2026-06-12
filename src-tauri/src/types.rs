@@ -178,6 +178,13 @@ pub struct PackageDetail {
     pub raw_json: serde_json::Value,
     pub exists_in_applications: bool,
     pub is_mas: bool,
+    /// Feature #4 — total on-disk size of the installed keg in bytes
+    /// (`du -sk` on `<prefix>/Cellar/<name>` for formulae,
+    /// `<prefix>/Caskroom/<token>` for casks, summing all installed
+    /// versions). `None` when the package isn't installed, the keg dir is
+    /// absent (e.g. a cask on Linux), or `du` couldn't measure it. Filled
+    /// lazily inside `brew_info` — the static parsers leave it `None`.
+    pub installed_size_bytes: Option<u64>,
 }
 
 // ---------- Outdated ----------

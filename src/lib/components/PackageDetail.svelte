@@ -48,6 +48,7 @@
   import { isLinux } from "$lib/util/platform";
   import { safeOpenUrl } from "$lib/util/url";
   import { bareToken } from "$lib/util/token";
+  import { fmtBytes } from "$lib/util/format";
   import { reportableToastError } from "$lib/util/reportIssue";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import IssueModal from "./IssueModal.svelte";
@@ -1077,6 +1078,21 @@
                     <Pill tone="info">dependency</Pill>
                   </span>
                 {/if}
+              </dd>
+            </div>
+          {/if}
+          <!-- Feature #4 — on-disk keg size. Travels on the PackageDetail
+               DTO (computed lazily by `brew_info` via `du -sk`); null when
+               the package isn't installed, the keg dir is absent (e.g. a
+               cask on Linux), or `du` couldn't measure it. Null → no row
+               (no fabricated "0 B" / estimate). Kind-agnostic and
+               self-gating on the null value, so no isLinux gate is needed.
+               Shares `fmtBytes` with the Dashboard Storage card. -->
+          {#if detail.installedSizeBytes != null}
+            <div>
+              <dt>Size</dt>
+              <dd title="Total on-disk size of the installed keg (all versions).">
+                {fmtBytes(detail.installedSizeBytes)}
               </dd>
             </div>
           {/if}

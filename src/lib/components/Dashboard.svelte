@@ -35,6 +35,7 @@
   import { brewErrorMessage, isBrewError, type DiskUsageReport } from "$lib/types";
   import { reportableToastError } from "$lib/util/reportIssue";
   import { isLinux, isMac } from "$lib/util/platform";
+  import { fmtBytes } from "$lib/util/format";
 
   let disk = $state<DiskUsageReport | null>(null);
   let diskLoading = $state(false);
@@ -257,13 +258,6 @@
   function viewVulnerablePackages() {
     ui.setSection("library");
     library.setFilter("vulnerable");
-  }
-
-  function fmtBytes(b: number): string {
-    if (b < 1024) return `${b} B`;
-    if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KB`;
-    if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`;
-    return `${(b / 1024 ** 3).toFixed(2)} GB`;
   }
 
   function fmt(n: number): string {
