@@ -27,6 +27,38 @@ struct CategoryTile: Identifiable, Hashable, Sendable {
     let count: Int
 }
 
+/// One co-occurrence sub-group within a selected category (feature #6).
+///
+/// IMPORTANT — this is NOT a true taxonomy tree. `categories.json` is strictly
+/// flat (no nested/sub-category field exists, and the offline categorizer emits
+/// a fixed single level). The only genuine second-level signal already in the
+/// data is multi-label membership: within category X, members are grouped by
+/// their OTHER co-assigned category slug, plus a sentinel `"__general__"` bucket for
+/// members carrying only X. Labels say "<X> + <Y>" / "General <X>" so the UI
+/// never implies a hierarchy the data doesn't have.
+struct CategorySubgroup: Identifiable, Hashable, Sendable {
+    var id: String { key }
+    /// Co-occurring category slug, or the sentinel `"__general__"` for solo members.
+    let key: String
+    /// "<Selected Label> + <Other Label>", or "General <Selected Label>".
+    let label: String
+    /// Member `(token, kind)` pairs, deduped within this sub-group, sorted by
+    /// token (case-insensitive) for a deterministic, parity-identical order.
+    let members: [SubgroupMember]
+    var count: Int { members.count }
+}
+
+/// A sub-group member: a catalog token + its kind, matching the Tauri
+/// `tokensInCategory` member shape (`{ name, kind }`) so membership is
+/// byte-identical across the two shells.
+struct SubgroupMember: Hashable, Sendable {
+    let token: String
+    let kind: InstalledPackage.Kind
+}
+
+/// Sentinel sub-group key for members that carry ONLY the selected category.
+let categorySubgroupGeneralKey = "__general__"
+
 struct CategoryCatalog: Sendable {
     /// slug → display label
     private let labels: [String: String]
@@ -111,6 +143,95 @@ struct CategoryCatalog: Sendable {
                              count: counts[slug] ?? 0)
             }
             .sorted { $0.count > $1.count }
+    }
+
+    /// All `(token, kind)` members of a category slug, sorted by token
+    /// (case-insensitive). Mirrors the Tauri `tokensInCategory` (member shape
+    /// `{ name, kind }`, same ordering). Casks first/formulae order doesn't
+    /// matter — the final sort is by token — but matching the value set is what
+    /// keeps the two shells in parity. Native is macOS-only, so casks are always
+    /// included (no `isLinux` gate; the Tauri side applies that gate).
+    func membersInCategory(_ slug: String) -> [SubgroupMember] {
+        var out: [SubgroupMember] = []
+        for (token, cats) in casks where cats.contains(slug) {
+            out.append(SubgroupMember(token: token, kind: .cask))
+        }
+        for (token, cats) in formulae where cats.contains(slug) {
+            out.append(SubgroupMember(token: token, kind: .formula))
+        }
+        out.sort { $0.token.localizedCaseInsensitiveCompare($1.token) == .orderedAscending }
+        return out
+    }
+
+    /// Whether a member belongs to the given sub-group `key` WITHIN `slug` — the
+    /// drill-down predicate that mirrors ``subgroups(in:)`` bucketing exactly so
+    /// a drilled-in list matches the sub-group's member count. `"__general__"` means
+    /// the member carries no OTHER real category (uncategorized doesn't count);
+    /// any other key means the member is also assigned that category.
+    func memberInSubgroup(token: String, kind: InstalledPackage.Kind,
+                          slug: String, subgroupKey: String) -> Bool {
+        let cats = slugs(for: token, kind: kind)
+        guard cats.contains(slug) else { return false }
+        let others = cats.filter { $0 != slug && $0 != "uncategorized" }
+        if subgroupKey == categorySubgroupGeneralKey { return others.isEmpty }
+        return others.contains(subgroupKey)
+    }
+
+    /// Co-occurrence sub-groups for a single selected category (feature #6).
+    ///
+    /// Given category `slug`, every member of that category is bucketed by each
+    /// of its OTHER category slugs; a member carrying only `slug` (no other real
+    /// category) lands in the sentinel `"__general__"` bucket. A member with N other
+    /// categories appears under each of those N sub-groups (deduped WITHIN a
+    /// bucket, NOT across — by design). `"uncategorized"` is never a co-occurring
+    /// bucket: it's excluded exactly as `tiles()`/`allCategories()` exclude it,
+    /// so a member whose only other slug is `uncategorized` is treated as solo.
+    ///
+    /// Ordering: descending member count, tie-break by ascending slug, with the
+    /// `"__general__"` bucket PINNED LAST. (Parity decision — both shells pin
+    /// `__general__` last and use the same tie-break.) Member lists inside each
+    /// bucket are token-sorted via ``membersInCategory``.
+    ///
+    /// Pure: derives solely from the in-memory `categories.json` maps — no
+    /// commands, no subprocess, no refetch. Returns `[]` for an unknown slug.
+    func subgroups(in slug: String) -> [CategorySubgroup] {
+        let selectedLabel = labels[slug] ?? slug.capitalized
+        var buckets: [String: [SubgroupMember]] = [:]
+
+        for member in membersInCategory(slug) {
+            let others = slugs(for: member.token, kind: member.kind)
+                .filter { $0 != slug && $0 != "uncategorized" }
+            if others.isEmpty {
+                buckets[categorySubgroupGeneralKey, default: []].append(member)
+            } else {
+                // Dedup within a bucket: a member can't legitimately carry the
+                // same other-slug twice, but guard anyway so counts are exact.
+                for other in Set(others) {
+                    buckets[other, default: []].append(member)
+                }
+            }
+        }
+
+        let groups: [CategorySubgroup] = buckets.map { key, members in
+            let sorted = members.sorted {
+                $0.token.localizedCaseInsensitiveCompare($1.token) == .orderedAscending
+            }
+            let label: String
+            if key == categorySubgroupGeneralKey {
+                label = "General \(selectedLabel)"
+            } else {
+                label = "\(selectedLabel) + \(labels[key] ?? key.capitalized)"
+            }
+            return CategorySubgroup(key: key, label: label, members: sorted)
+        }
+
+        return groups.sorted { a, b in
+            // Pin the sentinel "__general__" bucket last.
+            if a.key == categorySubgroupGeneralKey { return false }
+            if b.key == categorySubgroupGeneralKey { return true }
+            if a.count != b.count { return a.count > b.count }
+            return a.key < b.key
+        }
     }
 
     /// Top-N category breakdown across the installed set. Each package
