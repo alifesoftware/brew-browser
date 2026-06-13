@@ -26,8 +26,22 @@ struct RecentChangesTests {
             lines: [],
             exitCode: nil,
             durationMs: nil,
+            friendlyFailureMessage: nil,
             progress: nil
         )
+    }
+
+    @Test @MainActor func postJobRefreshOnlyRunsAfterSuccessfulCompletion() {
+        #expect(AppModel.shouldRefreshAfterJob(succeeded: true, canceled: false))
+        #expect(!AppModel.shouldRefreshAfterJob(succeeded: false, canceled: false))
+        #expect(!AppModel.shouldRefreshAfterJob(succeeded: false, canceled: true))
+    }
+
+    @Test @MainActor func failureNoticeTitlesUseActionVerb() {
+        #expect(AppModel.failureNoticeTitle(for: "Upgrading docker-desktop") == "Upgrade failed")
+        #expect(AppModel.failureNoticeTitle(for: "Installing wget") == "Install failed")
+        #expect(AppModel.failureNoticeTitle(for: "Uninstalling wget") == "Uninstall failed")
+        #expect(AppModel.failureNoticeTitle(for: "Dumping Brewfile: nightly") == "Dumping Brewfile: nightly failed")
     }
 
     // MARK: - classify()
@@ -157,26 +171,4 @@ struct RecentChangesTests {
         #expect(RecentChanges.recentChanges([]).isEmpty)
     }
 
-    // MARK: - Verb-mapping parity with ActivityView.displayLabel
-
-    @Test func verbMappingMatchesActivityDisplayLabel() {
-        // The card's past-tense verbs must match the verbs ActivityView derives
-        // from the same in-progress labels (Installing→Installed etc.).
-        let cases: [(ChangeKind, String, String)] = [
-            (.installed, "wget", "Installed wget"),
-            (.upgraded, "wget", "Upgraded wget"),
-            (.uninstalled, "wget", "Uninstalled wget"),
-        ]
-        for (kind, pkg, expected) in cases {
-            let change = RecentChange(id: UUID(), kind: kind, package: pkg, count: nil, startedAt: 0, status: .succeeded)
-            #expect(RecentChangesCard.summary(change) == expected)
-        }
-    }
-
-    @Test func bulkSummaryUsesCountOrPlural() {
-        let withCount = RecentChange(id: UUID(), kind: .upgraded, package: nil, count: 3, startedAt: 0, status: .succeeded)
-        #expect(RecentChangesCard.summary(withCount) == "Upgraded 3 packages")
-        let noCount = RecentChange(id: UUID(), kind: .upgraded, package: nil, count: nil, startedAt: 0, status: .succeeded)
-        #expect(RecentChangesCard.summary(noCount) == "Upgraded packages")
-    }
 }

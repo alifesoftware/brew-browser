@@ -40,7 +40,7 @@ struct ActivityDrawer: View {
                     progressBar(p)
                 }
                 if model.drawerOpen {
-                    console(job)
+                    expandedContent(job)
                     footer(job)
                 }
             }
@@ -138,6 +138,56 @@ struct ActivityDrawer: View {
         return s
     }
 
+    @ViewBuilder
+    private func expandedContent(_ job: ActivityJob) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            console(job)
+                .frame(maxWidth: .infinity)
+            if job.status == .failed {
+                failureNotice(job)
+                    .frame(width: 360)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func failureNotice(_ job: ActivityJob) -> some View {
+        if job.status == .failed {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.body)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(AppModel.failureNoticeTitle(for: job.label))
+                        .font(.callout.weight(.semibold))
+                    Text(job.friendlyFailureMessage ?? "See the Activity output below for details.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if job.friendlyFailureMessage == nil {
+                        Button("Report to brew-browser") {
+                            ReportIssue.open(for: job, brewVersion: model.brewVersion)
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(.red.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.top, 8)
+            .padding(.trailing, 12)
+            .padding(.leading, 8)
+        }
+    }
+
     private func console(_ job: ActivityJob) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -170,7 +220,8 @@ struct ActivityDrawer: View {
                 Text(Self.footerText(job))
                     .font(.caption)
                     .foregroundStyle(Self.footerColor(job.status))
-                if job.status == .failed {
+                    .lineLimit(3)
+                if job.status == .failed && job.friendlyFailureMessage == nil {
                     Button("Report to brew-browser") {
                         ReportIssue.open(for: job, brewVersion: model.brewVersion)
                     }
@@ -221,6 +272,9 @@ struct ActivityDrawer: View {
         case .succeeded: return dur.map { "Done in \($0)." } ?? "Done."
         case .failed:
             let base = dur.map { "Failed after \($0)." } ?? "Failed."
+            if let friendly = job.friendlyFailureMessage, !friendly.isEmpty {
+                return "\(base) See notice at right."
+            }
             if let code = job.exitCode, code != 0 { return "\(base) Exit \(code)." }
             return base
         case .canceled:  return "Stopped."

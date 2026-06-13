@@ -193,7 +193,7 @@ export type BrewStreamEvent =
   | { kind: "stdout";   jobId: string; line: string; ts: string }
   | { kind: "stderr";   jobId: string; line: string; ts: string }
   | { kind: "progress"; jobId: string; phase: string; package: string; current: number; total: number | null }
-  | { kind: "exit";     jobId: string; exitCode: number; success: boolean; durationMs: number }
+  | { kind: "exit";     jobId: string; exitCode: number; success: boolean; durationMs: number; friendlyMessage?: string }
   | { kind: "canceled"; jobId: string }
   | { kind: "error";    jobId: string; error: BrewErrorPayload };
 
@@ -1029,6 +1029,8 @@ export interface ActivityJob {
   lines: ActivityLine[];
   exitCode?: number;
   durationMs?: number;
+  /** Backend-generated friendly message for known environmental/upstream failures. */
+  friendlyMessage?: string;
   /** Best-effort live progress from brew's `==>` markers (running jobs). */
   progress?: JobProgress;
 }

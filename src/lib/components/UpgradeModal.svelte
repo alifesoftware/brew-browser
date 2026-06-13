@@ -154,8 +154,6 @@
           .scanIfNeeded()
           .then(() => vulnerabilities.maybeNotifyExposure())
           .catch(() => {});
-      } else {
-        toast.error("Upgrade finished with errors", "See the Activity drawer.");
       }
     } catch (e) {
       reportableToastError("Upgrade failed", e);

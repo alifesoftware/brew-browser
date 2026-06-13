@@ -27,10 +27,18 @@ struct PackageDetailView: View {
     /// still say installed:null — the installed list reflects reality first, so
     /// it's the primary signal here. Drives the footer's Install/Uninstall.
     private var isInstalled: Bool {
-        if model.installed.contains(where: { $0.name == pkg.name && $0.kind == pkg.kind }) {
+        if installedPackage != nil {
             return true
         }
         return info?.installedVersion != nil
+    }
+
+    private var installedPackage: InstalledPackage? {
+        model.installedPackageMatching(token: pkg.name, kind: pkg.kind)
+    }
+
+    private var installedOnRequest: Bool {
+        installedPackage?.installedOnRequest ?? pkg.installedOnRequest
     }
 
     var body: some View {
@@ -188,7 +196,7 @@ struct PackageDetailView: View {
                 // Dependency indicator: a formula installed only as a dependency
                 // (not on request) — mirrors the Tauri detail badge. Casks are
                 // always on-request so never show this. Feature #3.
-                if isInstalled, pkg.kind == .formula, !pkg.installedOnRequest {
+                if isInstalled, pkg.kind == .formula, !installedOnRequest {
                     Text("Dependency")
                         .font(.caption)
                         .foregroundStyle(.secondary)

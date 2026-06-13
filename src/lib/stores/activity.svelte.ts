@@ -171,6 +171,7 @@ class ActivityStore {
         j.status = evt.success ? "succeeded" : "failed";
         j.exitCode = evt.exitCode;
         j.durationMs = evt.durationMs;
+        j.friendlyMessage = evt.friendlyMessage;
         break;
       case "canceled":
         j.status = "canceled";

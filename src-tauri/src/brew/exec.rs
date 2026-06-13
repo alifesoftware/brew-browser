@@ -196,7 +196,8 @@ pub async fn run_brew_streaming(
     // Bounded ring of recent stderr lines so a non-zero exit can carry a
     // meaningful `stderr_excerpt` even when the caller doesn't subscribe
     // to the Channel (see Wave 3 code review C4).
-    let stderr_buf: Arc<Mutex<StderrRing>> = Arc::new(Mutex::new(StderrRing::new(MAX_STDERR_EXCERPT)));
+    let stderr_buf: Arc<Mutex<StderrRing>> =
+        Arc::new(Mutex::new(StderrRing::new(MAX_STDERR_EXCERPT)));
     let stderr_chan = on_event.clone();
     let stderr_buf_writer = Arc::clone(&stderr_buf);
     let stderr_task = tokio::spawn(async move {
@@ -267,15 +268,20 @@ pub async fn run_brew_streaming(
             // warnings, link conflicts, already-linked kegs) even though the
             // work completed. Treat those as success — they were the dominant
             // source of bogus "Upgrade-all failed" reports. See error_patterns.
-            let warnings_only =
-                !success && upgrade_warnings_only(&excerpt, &display_command);
+            let warnings_only = !success && upgrade_warnings_only(&excerpt, &display_command);
             let effective_success = success || warnings_only;
+            let friendly_message = if effective_success {
+                None
+            } else {
+                friendlify(&excerpt, &display_command)
+            };
 
             let _ = on_event.send(BrewStreamEvent::Exit {
                 job_id,
                 exit_code,
                 success: effective_success,
                 duration_ms,
+                friendly_message: friendly_message.clone(),
             });
 
             if effective_success {
@@ -286,7 +292,6 @@ pub async fn run_brew_streaming(
                     duration_ms,
                 })
             } else {
-                let friendly_message = friendlify(&excerpt, &display_command);
                 Err(BrewError::BrewExitNonZero {
                     command: display_command,
                     exit_code,
@@ -342,7 +347,11 @@ struct ProgressParser {
 
 impl ProgressParser {
     fn new() -> Self {
-        Self { total: None, current: 0, last_package: None }
+        Self {
+            total: None,
+            current: 0,
+            last_package: None,
+        }
     }
 
     /// Extract a package name from the remainder of a work marker.
@@ -362,7 +371,11 @@ impl ProgressParser {
         // Total from the upgrade header: "Upgrading 32 outdated packages:".
         if let Some(r) = rest.strip_prefix("Upgrading ") {
             if r.contains("outdated package") {
-                if let Some(n) = r.split_whitespace().next().and_then(|w| w.parse::<u32>().ok()) {
+                if let Some(n) = r
+                    .split_whitespace()
+                    .next()
+                    .and_then(|w| w.parse::<u32>().ok())
+                {
                     self.total = Some(n);
                 }
                 return None;
@@ -477,11 +490,7 @@ impl StderrRing {
     }
 
     fn snapshot(&self) -> String {
-        self.lines
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.lines.iter().cloned().collect::<Vec<_>>().join("\n")
     }
 }
 
@@ -508,7 +517,10 @@ mod tests {
         r.push("bbbbb"); // 5 + 1 = 6, total 12
         r.push("ccccc"); // would push to 18 > 16, drop "aaaaa"
         let s = r.snapshot();
-        assert!(!s.contains("aaaaa"), "oldest line should be dropped, got {s:?}");
+        assert!(
+            !s.contains("aaaaa"),
+            "oldest line should be dropped, got {s:?}"
+        );
         assert!(s.contains("bbbbb"));
         assert!(s.contains("ccccc"));
     }
@@ -553,15 +565,23 @@ mod tests {
         // Non-marker lines are ignored.
         assert!(p.observe("foo 1.0 -> 1.1").is_none());
 
-        let t1 = p.observe("==> Pouring foo--1.1.arm64.bottle.tar.gz").unwrap();
-        assert_eq!((t1.phase.as_str(), t1.package.as_str(), t1.current, t1.total),
-                   ("Pouring", "foo", 1, Some(3)));
+        let t1 = p
+            .observe("==> Pouring foo--1.1.arm64.bottle.tar.gz")
+            .unwrap();
+        assert_eq!(
+            (t1.phase.as_str(), t1.package.as_str(), t1.current, t1.total),
+            ("Pouring", "foo", 1, Some(3))
+        );
 
         // Downloading updates phase without advancing the counter.
-        let t2 = p.observe("==> Downloading https://example.com/bar.bottle").unwrap();
+        let t2 = p
+            .observe("==> Downloading https://example.com/bar.bottle")
+            .unwrap();
         assert_eq!((t2.phase.as_str(), t2.current), ("Downloading", 1));
 
-        let t3 = p.observe("==> Pouring bar--2.0.arm64.bottle.tar.gz").unwrap();
+        let t3 = p
+            .observe("==> Pouring bar--2.0.arm64.bottle.tar.gz")
+            .unwrap();
         assert_eq!((t3.package.as_str(), t3.current), ("bar", 2));
 
         // Repeating the same package's phase does not double-count.
@@ -572,7 +592,9 @@ mod tests {
     #[test]
     fn progress_total_from_dependency_list() {
         let mut p = ProgressParser::new();
-        assert!(p.observe("==> Installing dependencies for wget: openssl@3, ca-certificates").is_none());
+        assert!(p
+            .observe("==> Installing dependencies for wget: openssl@3, ca-certificates")
+            .is_none());
         let t = p.observe("==> Installing openssl@3").unwrap();
         assert_eq!(t.total, Some(3)); // 2 deps + the target
     }

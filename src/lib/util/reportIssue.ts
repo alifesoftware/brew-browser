@@ -5,8 +5,8 @@
  * Two entry points:
  *
  *   - `reportableToastError(title, error)` — for catch blocks. Shows a
- *     `toast.error` with the friendly message in the body AND a
- *     "Report to brew-browser" action button below it. One-call upgrade
+ *     `toast.error` with the friendly message in the body. Unknown failures
+ *     include a "Report to brew-browser" action button below it. One-call upgrade
  *     of the old `toast.error(title, isBrewError(e) ? e.code : String(e))`
  *     anti-pattern (which threw away the friendly message and gave the
  *     user no recourse beyond the raw discriminator string).
@@ -159,9 +159,9 @@ export function reportContextFromActivityJob(
  * Drop-in replacement for the old anti-pattern:
  *   toast.error(title, isBrewError(e) ? e.code : String(e))
  *
- * Renders the friendly message in the toast body AND attaches a
- * "Report to brew-browser" action button that opens the pre-filled
- * GitHub new-issue URL via `safeOpenUrl`.
+ * Renders unknown failures in a toast with a "Report to brew-browser" action
+ * button. Classified streaming brew failures are already rendered in the
+ * Activity drawer, so those do not create a second popup.
  *
  * The friendly message comes from `brewErrorMessage(e)` — which on
  * `brew_exit_non_zero` errors uses the backend's `friendlyMessage`
@@ -172,6 +172,9 @@ export function reportContextFromActivityJob(
 export function reportableToastError(title: string, e: unknown): void {
   if (isBrewError(e)) {
     const ctx = reportContextFromBrewError(e, title);
+    if (e.code === "brew_exit_non_zero" && e.friendlyMessage) {
+      return;
+    }
     toast.error(title, brewErrorMessage(e), {
       label: "Report to brew-browser",
       onClick: () => {

@@ -7,6 +7,7 @@
   import Square from "@lucide/svelte/icons/square";
   import CheckCircle2 from "@lucide/svelte/icons/check-circle-2";
   import XCircle from "@lucide/svelte/icons/x-circle";
+  import AlertTriangle from "@lucide/svelte/icons/alert-triangle";
 
   import { activity } from "$lib/stores/activity.svelte";
   import { ui } from "$lib/stores/ui.svelte";
@@ -174,6 +175,19 @@
     const s = totalSec % 60;
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
   }
+
+  function failedFooter(job: typeof activeJob): string {
+    if (!job) return "Failed.";
+    const base = `Failed${job.durationMs ? ` after ${formatElapsed(job.durationMs)}` : ""}.`;
+    return job.friendlyMessage ? `${base} See notice at right.` : `${base} Output above.`;
+  }
+
+  function failureTitle(label: string): string {
+    if (label.startsWith("Upgrading ")) return "Upgrade failed";
+    if (label.startsWith("Installing ")) return "Install failed";
+    if (label.startsWith("Uninstalling ")) return "Uninstall failed";
+    return `${label} failed`;
+  }
 </script>
 
 {#if ui.drawerOpen}
@@ -236,39 +250,53 @@
       <!-- aria-live flips between "polite" (slow streams) and "off" (high-volume
            install surges) — see §N4. A separate sr-only completion line below
            guarantees SR users still get an exit signal when muted. -->
-      <div class="console" bind:this={consoleEl} onscroll={onScroll} role="log" aria-live={liveMode} aria-atomic="false">
-        {#if !activeJob}
-          <p class="muted">Quiet. brew commands run by brew-browser appear here.</p>
-        {:else if activeJob.lines.length === 0}
-          <p class="muted">Waiting for output…</p>
-        {:else}
-          {#each activeJob.lines as line, i (i)}
-            {@const cls = classifyLine(line.text)}
-            <div class="line {cls}">{stripAnsi(line.text)}</div>
-          {/each}
-          {#if activeJob.status !== "running"}
-            <!-- Visible footer line. The inline aria-live was removed in §N4;
-                 the completion announcer below is the single authoritative
-                 polite live region for exit signals so SR users hear it once
-                 (and reliably) even when the streaming log was muted mid-surge. -->
-            <div class="footer-line {activeJob.status}">
-              {#if activeJob.status === "succeeded"}
-                Done{activeJob.durationMs ? ` in ${formatElapsed(activeJob.durationMs)}` : ""}.
-              {:else if activeJob.status === "failed"}
-                <span>Failed{activeJob.durationMs ? ` after ${formatElapsed(activeJob.durationMs)}` : ""}. Output above.</span>
-                <button
-                  type="button"
-                  class="report-btn"
-                  onclick={() => { void openReportIssueFromJob(activeJob!, activeJob!.label); }}
-                  title="Open a pre-filled GitHub issue against brew-browser with this output"
-                >
-                  Report to brew-browser
-                </button>
-              {:else if activeJob.status === "canceled"}
-                Stopped. Output above.
-              {/if}
-            </div>
+      <div class="drawer-body" class:with-notice={activeJob?.status === "failed"}>
+        <div class="console" bind:this={consoleEl} onscroll={onScroll} role="log" aria-live={liveMode} aria-atomic="false">
+          {#if !activeJob}
+            <p class="muted">Quiet. brew commands run by brew-browser appear here.</p>
+          {:else if activeJob.lines.length === 0}
+            <p class="muted">Waiting for output…</p>
+          {:else}
+            {#each activeJob.lines as line, i (i)}
+              {@const cls = classifyLine(line.text)}
+              <div class="line {cls}">{stripAnsi(line.text)}</div>
+            {/each}
+            {#if activeJob.status !== "running"}
+              <!-- Visible footer line. The inline aria-live was removed in §N4;
+                   the completion announcer below is the single authoritative
+                   polite live region for exit signals so SR users hear it once
+                   (and reliably) even when the streaming log was muted mid-surge. -->
+              <div class="footer-line {activeJob.status}">
+                {#if activeJob.status === "succeeded"}
+                  Done{activeJob.durationMs ? ` in ${formatElapsed(activeJob.durationMs)}` : ""}.
+                {:else if activeJob.status === "failed"}
+                  <span>{failedFooter(activeJob)}</span>
+                {:else if activeJob.status === "canceled"}
+                  Stopped. Output above.
+                {/if}
+              </div>
+            {/if}
           {/if}
+        </div>
+
+        {#if activeJob?.status === "failed"}
+          <aside class="failure-card" aria-label="Failure details">
+            <div class="failure-card-head">
+              <AlertTriangle size={16} />
+              <h3>{failureTitle(activeJob.label)}</h3>
+            </div>
+            <p>{activeJob.friendlyMessage ?? "See the Activity output for details."}</p>
+            {#if !activeJob.friendlyMessage}
+              <button
+                type="button"
+                class="report-btn"
+                onclick={() => { void openReportIssueFromJob(activeJob!, activeJob!.label); }}
+                title="Open a pre-filled GitHub issue against brew-browser with this output"
+              >
+                Report to brew-browser
+              </button>
+            {/if}
+          </aside>
         {/if}
       </div>
 
@@ -358,8 +386,20 @@
     white-space: nowrap;
   }
 
-  .console {
+  .drawer-body {
     flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: stretch;
+    background: var(--color-console-bg);
+  }
+  .drawer-body.with-notice {
+    gap: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  .console {
+    flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
     background: var(--color-console-bg);
@@ -368,6 +408,39 @@
     font-size: var(--text-mono);
     line-height: var(--lh-mono);
     padding: var(--space-3) var(--space-4);
+  }
+  .failure-card {
+    flex: 0 0 min(360px, 34vw);
+    align-self: flex-start;
+    margin-top: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid color-mix(in oklch, var(--color-danger) 42%, var(--color-border));
+    border-radius: var(--radius-lg);
+    background: color-mix(in oklch, var(--color-danger-subtle) 58%, var(--color-surface-raised));
+    color: var(--color-text-primary);
+    box-shadow: var(--shadow-sm);
+  }
+  .failure-card-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-danger-on-subtle, var(--color-danger));
+  }
+  .failure-card-head h3 {
+    margin: 0;
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-semibold);
+  }
+  .failure-card p {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-caption);
+    line-height: var(--lh-body);
+    overflow-wrap: anywhere;
+  }
+  .failure-card .report-btn {
+    margin-top: var(--space-3);
+    color: var(--color-danger-on-subtle, var(--color-danger));
   }
   .line {
     white-space: pre-wrap;
@@ -392,6 +465,11 @@
     align-items: center;
     gap: var(--space-3);
     flex-wrap: wrap;
+  }
+  .footer-line > span {
+    min-width: 0;
+    flex: 1 1 24rem;
+    overflow-wrap: anywhere;
   }
   .footer-line.succeeded { color: var(--color-success); font-style: normal; }
   .footer-line.failed    { color: var(--color-danger);  font-style: normal; }

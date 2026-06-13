@@ -120,8 +120,62 @@ struct DiscoverView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         } else {
-            table
+            VStack(spacing: 0) {
+                subgroupStrip
+                table
+            }
         }
+    }
+
+    // Co-occurrence sub-group chips for the selected category (feature #6).
+    // Shown only when exactly one category is selected and no search is
+    // narrowing the list (model.discoverSubgroups is empty otherwise). Each chip
+    // narrows the table to one sub-group; "All" clears the drill-down. These are
+    // co-occurrence buckets (a category a member ALSO carries), NOT a true
+    // sub-taxonomy — the labels say "X + Y" / "General X" so the grouping is
+    // never mistaken for a hierarchy. A lone "General X" bucket (a category whose
+    // members are all solo) is suppressed: a single chip would look broken and
+    // adds nothing over the flat list.
+    @ViewBuilder
+    private var subgroupStrip: some View {
+        let groups = model.discoverSubgroups
+        let onlyGeneral = groups.count == 1 && groups.first?.key == categorySubgroupGeneralKey
+        if !groups.isEmpty && !onlyGeneral {
+            VStack(alignment: .leading, spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        subgroupChip(label: "All", count: nil, key: nil)
+                        ForEach(groups) { g in
+                            subgroupChip(label: g.label, count: g.count, key: g.key)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                Divider()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func subgroupChip(label: String, count: Int?, key: String?) -> some View {
+        let active = model.discoverSubgroupKey == key
+        Button {
+            model.discoverSubgroupKey = key
+        } label: {
+            HStack(spacing: 5) {
+                Text(label)
+                if let count { Text("\(count)").foregroundStyle(.secondary).monospacedDigit() }
+            }
+            .font(.caption.weight(active ? .semibold : .regular))
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(active ? AnyShapeStyle(.tint.opacity(0.18)) : AnyShapeStyle(.quaternary),
+                        in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .help(key == categorySubgroupGeneralKey
+              ? "Members of this category with no other category"
+              : "Members also categorized here")
     }
 
     // Recent-search chips — click to re-run. Persisted in LocalPrefs

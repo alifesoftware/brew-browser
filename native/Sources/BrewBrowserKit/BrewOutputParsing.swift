@@ -49,7 +49,65 @@ enum BrewErrorPatterns {
                 + "this isn't a brew-browser problem."
         }
 
+        // Pattern 5 — a cask installer/remover invoked sudo, but brew-browser
+        // has no interactive terminal for the admin password prompt.
+        if sudoPasswordPromptRequired(stderr) {
+            if let token = sudoCaskToken(stderr: stderr, command: command) {
+                return "The cask `\(token)` needs an administrator password, but "
+                    + "brew-browser runs brew without an interactive terminal so sudo "
+                    + "cannot prompt here. Run this in Terminal: "
+                    + "`brew upgrade --cask \(token)`, then refresh brew-browser."
+            }
+            return "This Homebrew cask needs an administrator password, but "
+                + "brew-browser runs brew without an interactive terminal so sudo "
+                + "cannot prompt here. Run the cask upgrade in Terminal, then "
+                + "refresh brew-browser."
+        }
+
         return nil
+    }
+
+    private static func sudoPasswordPromptRequired(_ stderr: String) -> Bool {
+        stderr.contains("sudo: a terminal is required to read the password")
+            || stderr.contains("sudo: a password is required")
+            || stderr.contains("sudo: no tty present and no askpass program specified")
+    }
+
+    private static func sudoCaskToken(stderr: String, command: String) -> String? {
+        tokenFromBrewError(stderr) ?? tokenFromCommand(command)
+    }
+
+    private static func tokenFromBrewError(_ stderr: String) -> String? {
+        for line in stderr.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("Error: ") else { continue }
+            let rest = trimmed.dropFirst("Error: ".count)
+            guard let token = rest.split(separator: ":", maxSplits: 1).first.map(String.init),
+                  validCaskToken(token) else { continue }
+            return token
+        }
+        return nil
+    }
+
+    private static func tokenFromCommand(_ command: String) -> String? {
+        var sawAction = false
+        for part in command.split(separator: " ").map(String.init) {
+            if !sawAction {
+                sawAction = part == "upgrade" || part == "install" || part == "reinstall"
+                continue
+            }
+            if part.hasPrefix("-") { continue }
+            return validCaskToken(part) ? part : nil
+        }
+        return nil
+    }
+
+    private static func validCaskToken(_ token: String) -> Bool {
+        guard !token.isEmpty else { return false }
+        return token.unicodeScalars.allSatisfy { scalar in
+            CharacterSet.alphanumerics.contains(scalar)
+                || "._-+@".unicodeScalars.contains(scalar)
+        }
     }
 
     /// True when a non-zero `brew upgrade`/`install` exit carries ONLY non-fatal
@@ -71,6 +129,9 @@ enum BrewErrorPatterns {
             "Download failed",
             "Could not resolve host",
             "has already locked",          // concurrent lock — env. failure
+            "sudo: a terminal is required to read the password",
+            "sudo: a password is required",
+            "sudo: no tty present and no askpass program specified",
             "Please report this issue:",
             "Homebrew::Bundle::Brew::Topo",
             "checksum does not match",

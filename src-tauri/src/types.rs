@@ -49,7 +49,6 @@ pub struct BrewEnvironment {
     pub path_used: Option<String>,
 }
 
-
 // ---------- Package list ----------
 
 /// Where the frontend should source an icon for a given package row.
@@ -268,6 +267,8 @@ pub enum BrewStreamEvent {
         exit_code: i32,
         success: bool,
         duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        friendly_message: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     Canceled { job_id: Uuid },
@@ -636,7 +637,11 @@ mod tests {
             "icon_source",
             "github_homepage",
         ] {
-            assert!(v.get(snake).is_none(), "snake key {:?} must not be present", snake);
+            assert!(
+                v.get(snake).is_none(),
+                "snake key {:?} must not be present",
+                snake
+            );
         }
     }
 
@@ -685,6 +690,7 @@ mod tests {
             exit_code: 0,
             success: true,
             duration_ms: 123,
+            friendly_message: None,
         };
         let v = serde_json::to_value(&evt).unwrap();
         // Tag discriminator.
@@ -694,6 +700,7 @@ mod tests {
         assert_eq!(v["exitCode"], 0);
         assert_eq!(v["success"], true);
         assert_eq!(v["durationMs"], 123);
+        assert!(v.get("friendlyMessage").is_none());
     }
 
     #[test]

@@ -47,8 +47,6 @@ struct DashboardView: View {
                         if !model.categories.isEmpty { CategoriesCard(model: model) }
                     }
 
-                    if !model.recentChangesPreview.isEmpty { RecentChangesCard(model: model) }
-
                     if model.githubStatsEligible { GitHubCard(model: model) }
 
                     // Exposure card — opt-in only; hidden entirely when
@@ -546,114 +544,6 @@ struct StorageCard: View {
             }
             .padding(.top, 2)
         }
-    }
-}
-
-// MARK: - Recent changes
-
-/// Dashboard "Recent changes" card — the last few package changes (installed /
-/// upgraded / uninstalled), derived purely from the existing persisted activity
-/// log. Each row: past-tense verb + package + relative timestamp + outcome icon.
-/// "more in Activity →" deep-links to the full history. Mirrors the Tauri
-/// Dashboard "Recent changes" card and the shared `RecentChanges` contract; no
-/// version delta is shown (the activity log records none — see
-/// `RecentChanges.swift`). Failed/canceled changes are kept and visually marked
-/// "attempted" rather than dropped.
-struct RecentChangesCard: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        GroupBox {
-            VStack(spacing: 0) {
-                HStack {
-                    Button {
-                        model.openActivity()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("Recent changes").font(.headline)
-                            Image(systemName: "arrow.right").font(.caption)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                    Button("more in Activity →") { model.openActivity() }
-                        .buttonStyle(.link)
-                }
-                .padding(.bottom, 8)
-
-                ForEach(model.recentChangesPreview) { change in
-                    row(change)
-                    if change.id != model.recentChangesPreview.last?.id { Divider() }
-                }
-            }
-            .padding(.top, 2)
-        }
-    }
-
-    private func row(_ change: RecentChange) -> some View {
-        HStack(spacing: 10) {
-            statusIcon(change.status)
-            // Verb + package — flexible, takes the remaining space.
-            Text(Self.summary(change))
-                .lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            // Failed/canceled didn't actually change anything — mark them so the
-            // row doesn't read as a completed change.
-            if change.status != .succeeded {
-                Text(change.status == .failed ? "attempted" : "canceled")
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(.quaternary, in: .capsule)
-                    .foregroundStyle(.secondary)
-            }
-            // Relative timestamp — right-aligned, same RelativeDateTimeFormatter
-            // semantics as the Exposure card's "last scan" line.
-            Text(Self.relativeTime(change.startedAt))
-                .font(.callout).foregroundStyle(.secondary)
-                .frame(width: 120, alignment: .trailing)
-        }
-        .padding(.vertical, 7)
-        .padding(.horizontal, 8)
-    }
-
-    @ViewBuilder
-    private func statusIcon(_ status: ActivityJob.JobStatus) -> some View {
-        switch status {
-        case .running:   Image(systemName: "circle.dotted").foregroundStyle(.secondary)
-        case .succeeded: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failed:    Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-        case .canceled:  Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - Formatting (static; pure)
-
-    /// Past-tense verb + package, e.g. "Installed wget", "Upgraded 3 packages",
-    /// "Upgraded packages" (bulk, no count). Verbs match the native
-    /// `ActivityView.displayLabel` mapping (Installing→Installed etc.) so both
-    /// shells render identical wording.
-    static func summary(_ change: RecentChange) -> String {
-        let verb: String
-        switch change.kind {
-        case .installed:   verb = "Installed"
-        case .upgraded:    verb = "Upgraded"
-        case .uninstalled: verb = "Uninstalled"
-        case .other:       verb = ""   // never reaches the feed
-        }
-        if let package = change.package {
-            return "\(verb) \(package)"
-        }
-        if let count = change.count {
-            return "\(verb) \(count) packages"
-        }
-        return "\(verb) packages"
-    }
-
-    /// "2 hours ago" from epoch seconds — same formatter UX as the Exposure card.
-    static func relativeTime(_ startedAt: Double) -> String {
-        let fmt = RelativeDateTimeFormatter()
-        fmt.unitsStyle = .abbreviated
-        return fmt.localizedString(for: Date(timeIntervalSince1970: startedAt), relativeTo: Date())
     }
 }
 

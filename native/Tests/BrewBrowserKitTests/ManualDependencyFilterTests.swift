@@ -82,6 +82,58 @@ struct InstalledPackageOnRequestTests {
         )
         #expect(tagged[0].installedOnRequest)
     }
+
+    @Test func installedInfoV2ParsesFormulaeCasksAndOnRequestFlags() throws {
+        let raw = """
+        {
+          "formulae": [
+            {
+              "name": "wget",
+              "versions": { "stable": "1.25.0" },
+              "installed": [
+                { "version": "1.25.0", "installed_on_request": true }
+              ]
+            },
+            {
+              "name": "openssl@3",
+              "versions": { "stable": "3.6.0" },
+              "installed": [
+                { "version": "3.6.0", "installed_on_request": false }
+              ]
+            }
+          ],
+          "casks": [
+            { "token": "docker-desktop", "version": "4.77.0", "installed": "4.65.0,221669" }
+          ]
+        }
+        """
+        let packages = try BrewService.parseInstalledInfoV2(raw)
+        let byName = Dictionary(uniqueKeysWithValues: packages.map { ($0.name, $0) })
+
+        #expect(byName["wget"]?.version == "1.25.0")
+        #expect(byName["wget"]?.installedOnRequest == true)
+        #expect(byName["openssl@3"]?.installedOnRequest == false)
+        #expect(byName["docker-desktop"]?.kind == .cask)
+        #expect(byName["docker-desktop"]?.version == "4.65.0,221669")
+        #expect(byName["docker-desktop"]?.installedOnRequest == true)
+    }
+
+    @MainActor
+    @Test func tapQualifiedTokensMatchBareInstalledPackage() {
+        let m = AppModel()
+        m.installed = [
+            InstalledPackage(name: "opencode", version: "1.17.3", kind: .formula, installedOnRequest: true)
+        ]
+
+        #expect(m.isPackageInstalled(token: "anomalyco/tap/opencode", kind: .formula))
+
+        let detail = m.packageForDetail(
+            InstalledPackage(name: "anomalyco/tap/opencode", version: "1.17.4", kind: .formula)
+        )
+        #expect(detail.name == "anomalyco/tap/opencode")
+        #expect(detail.version == "1.17.3")
+        #expect(detail.installedOnRequest)
+    }
 }
 
 // MARK: - libraryRows membership under each filter (AppModel-level)

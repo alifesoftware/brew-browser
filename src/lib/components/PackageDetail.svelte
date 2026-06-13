@@ -212,8 +212,6 @@
             .then(() => vulnerabilities.maybeNotifyExposure())
             .catch(() => {});
         }
-      } else {
-        toast.error(`Install failed: ${name}`);
       }
     } catch (e) {
       reportableToastError("Install failed", e);
@@ -254,8 +252,6 @@
           vulnerabilities.invalidate(kind, name, removedVersion).catch(() => {});
         }
         ui.closeDetail();
-      } else {
-        toast.error(`Uninstall failed: ${name}`);
       }
     } catch (e) {
       reportableToastError("Uninstall failed", e);
@@ -294,8 +290,6 @@
             .then(() => vulnerabilities.maybeNotifyExposure())
             .catch(() => {});
         }
-      } else {
-        toast.error(`Upgrade failed: ${name}`);
       }
     } catch (e) {
       reportableToastError("Upgrade failed", e);

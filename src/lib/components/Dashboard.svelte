@@ -36,13 +36,6 @@
   import { reportableToastError } from "$lib/util/reportIssue";
   import { isLinux, isMac } from "$lib/util/platform";
   import { fmtBytes } from "$lib/util/format";
-  import {
-    recentChanges,
-    changeVerb,
-    changeSubject,
-    RECENT_CHANGES_LIMIT,
-  } from "$lib/util/recentChanges";
-  import XCircle from "@lucide/svelte/icons/x-circle";
 
   let disk = $state<DiskUsageReport | null>(null);
   let diskLoading = $state(false);
@@ -253,39 +246,6 @@
 
   async function scanExposureNow() {
     await vulnerabilities.scanAll(true);
-  }
-
-  // ────────────────────────────────────────────────────────────────
-  // Feature #5 — Recent changes card
-  //
-  // A PURE DERIVATION over the existing activity log (no new data, no
-  // subprocess, no new persisted store). `recentChanges` classifies each
-  // terminal job into a package-change kind + package + timestamp + outcome,
-  // most-recent-first. The native build derives the identical contract from
-  // its own job history. Carries NO version delta — the activity log records
-  // no structured old→new version, so we don't fabricate one (an "outdated"
-  // package's installed→stable is a forward-looking upgrade PREVIEW shown by
-  // the Updates card above, not a historical change, so it stays out of here).
-  let recent = $derived(recentChanges(activity.jobs, RECENT_CHANGES_LIMIT));
-
-  /** Total package-change rows available (unbounded) — drives the
-   *  "+ N more in Activity" footer count. */
-  let recentTotal = $derived(recentChanges(activity.jobs, Infinity).length);
-
-  /** Same RelativeTimeFormat language as the Exposure / Settings cards. */
-  const RECENT_RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  function recentRelative(epochMs: number): string {
-    if (!epochMs) return "";
-    const deltaSec = Math.round((epochMs - Date.now()) / 1000);
-    const abs = Math.abs(deltaSec);
-    if (abs < 60) return RECENT_RELATIVE.format(deltaSec, "second");
-    if (abs < 3600) return RECENT_RELATIVE.format(Math.round(deltaSec / 60), "minute");
-    if (abs < 86400) return RECENT_RELATIVE.format(Math.round(deltaSec / 3600), "hour");
-    return RECENT_RELATIVE.format(Math.round(deltaSec / 86400), "day");
-  }
-
-  function goToActivity() {
-    ui.setSection("activity");
   }
 
   /** Jump to Library with the "vulnerable" filter pre-selected, so the
@@ -559,8 +519,6 @@
           .scanIfNeeded()
           .then(() => vulnerabilities.maybeNotifyExposure())
           .catch(() => {});
-      } else {
-        toast.error("Upgrade-all finished with errors");
       }
     } catch (e) {
       reportableToastError("Upgrade-all failed", e);
@@ -1069,51 +1027,6 @@
         </section>
       {/if}
 
-      <!-- Feature #5 — Recent changes. A pure projection of the activity
-           history: the last few package installs / upgrades / uninstalls with
-           verb + package + relative time + outcome icon, deep-linking to the
-           full Activity view. Hidden entirely when there are no package
-           changes yet (the Activity view owns the first-run empty-state). -->
-      {#if recent.length > 0}
-        <section class="card">
-          <div class="card-head">
-            <button
-              type="button"
-              class="card-title-link"
-              onclick={goToActivity}
-              title="Open Activity"
-            >
-              <h2>Recent changes</h2>
-              <span class="card-title-chevron" aria-hidden="true">→</span>
-            </button>
-          </div>
-          <ul class="recent-list">
-            {#each recent as c (c.jobId)}
-              <li class="recent-row">
-                <span class="rc-status" aria-hidden="true">
-                  {#if c.status === "succeeded"}<CheckCircle2 size={14} class="ok" />
-                  {:else if c.status === "failed"}<XCircle size={14} class="fail" />
-                  {:else}<XCircle size={14} class="dim" />{/if}
-                </span>
-                <span class="rc-text truncate">
-                  <span class="rc-verb">{changeVerb(c.kind)}</span>
-                  <span class="rc-subject">{changeSubject(c)}</span>
-                  {#if c.status === "failed"}<span class="rc-outcome rc-outcome--fail">failed</span>
-                  {:else if c.status === "canceled"}<span class="rc-outcome rc-outcome--dim">canceled</span>{/if}
-                </span>
-                <span class="rc-time text-muted">{recentRelative(c.timestamp)}</span>
-              </li>
-            {/each}
-          </ul>
-          {#if recentTotal > recent.length}
-            <div class="card-foot">
-              <button class="link" onclick={goToActivity}>
-                + {recentTotal - recent.length} more in Activity →
-              </button>
-            </div>
-          {/if}
-        </section>
-      {/if}
     {/if}
   </div>
 </section>
@@ -1322,34 +1235,6 @@
   .outdated-list li:last-child .outdated-row { border-bottom: none; }
   .o-name { font-weight: var(--fw-medium); }
   .o-version { font-size: var(--text-body-sm); }
-
-  /* ─── Recent changes list (Feature #5) ───────────────────
-     Mirrors ActivityHistory's row grammar: status icon · label · time. */
-  .recent-list { display: flex; flex-direction: column; }
-  .recent-row {
-    display: grid;
-    grid-template-columns: 20px minmax(0, 1fr) auto;
-    gap: var(--space-3);
-    align-items: center;
-    padding: var(--space-2) var(--space-4);
-    border-bottom: 1px solid var(--color-border);
-  }
-  .recent-row:last-child { border-bottom: none; }
-  .rc-status { display: inline-flex; align-items: center; }
-  .rc-status :global(.ok) { color: var(--color-success); }
-  .rc-status :global(.fail) { color: var(--color-danger); }
-  .rc-status :global(.dim) { color: var(--color-text-muted); }
-  .rc-text { font-size: var(--text-body); color: var(--color-text-primary); }
-  .rc-verb { color: var(--color-text-secondary); }
-  .rc-subject { font-weight: var(--fw-medium); }
-  .rc-outcome { font-size: var(--text-body-sm); }
-  .rc-outcome--fail { color: var(--color-danger); }
-  .rc-outcome--dim { color: var(--color-text-muted); }
-  .rc-time {
-    font-size: var(--text-body-sm);
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
 
   /* ─── Split ───────────────────────────────────────────── */
   .split { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }

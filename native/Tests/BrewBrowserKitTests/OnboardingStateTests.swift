@@ -60,4 +60,28 @@ struct OnboardingStateTests {
         let model = AppModel()
         #expect(model.brewMissing == (BrewService.resolveBrewPath() == nil))
     }
+
+    @Test func loadErrorDoesNotMaskKnownBrewInstall() {
+        let model = AppModel()
+        model.brewMissing = false
+        model.dashboardLoaded = true
+        model.brewVersion = "6.0.1"
+        model.brewPrefix = "/opt/homebrew"
+        model.loadError = "brew exited with code 1: sudo: a password is required"
+
+        #expect(model.brewHealth == .ready)
+        #expect(model.brewShortLabel == "brew 6.0.1")
+        #expect(model.brewStatusTooltip.contains("/opt/homebrew"))
+    }
+
+    @Test func unresolvedVersionWithLoadErrorStillReportsMissing() {
+        let model = AppModel()
+        model.brewMissing = false
+        model.dashboardLoaded = true
+        model.brewVersion = "—"
+        model.loadError = "Couldn't find the brew executable. Is Homebrew installed?"
+
+        #expect(model.brewHealth == .missing)
+        #expect(model.brewShortLabel == "brew not found")
+    }
 }

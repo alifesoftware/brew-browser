@@ -325,11 +325,43 @@ struct BrewService: Sendable {
     }
 
     /// All installed packages — formulae + casks — merged and name-sorted.
+    /// Mirrors Tauri's `brew_list`: `brew info --installed --json=v2`.
+    /// This survives Homebrew 6's untrusted-cask-tap guard better than
+    /// `brew list --cask --versions`, and carries formula `installed_on_request`
+    /// so the Manual/Dependency filters do not need a second brew call.
     func listInstalledAll() async throws -> [InstalledPackage] {
-        async let formulae = listInstalledFormulae()
-        async let casks = listInstalledCasks()
-        let merged = try await formulae + casks
-        return merged.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let raw = try await runCapture(["info", "--installed", "--json=v2"])
+        return try Self.parseInstalledInfoV2(raw)
+    }
+
+    static func parseInstalledInfoV2(_ raw: String) throws -> [InstalledPackage] {
+        let data = Data(raw.utf8)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw BrewError.nonZeroExit(code: -1, stderr: "Unparseable brew info --installed JSON")
+        }
+
+        let formulae = (root["formulae"] as? [[String: Any]] ?? []).compactMap { o -> InstalledPackage? in
+            guard let name = o["name"] as? String else { return nil }
+            let installed = o["installed"] as? [[String: Any]]
+            let first = installed?.first
+            let version = first?["version"] as? String
+                ?? ((o["versions"] as? [String: Any])?["stable"] as? String)
+                ?? "—"
+            let onRequest = first?["installed_on_request"] as? Bool ?? false
+            return InstalledPackage(name: name, version: version, kind: .formula, installedOnRequest: onRequest)
+        }
+
+        let casks = (root["casks"] as? [[String: Any]] ?? []).compactMap { o -> InstalledPackage? in
+            guard let token = o["token"] as? String else { return nil }
+            let installed = o["installed"] as? String
+            let version = installed
+                ?? o["version"] as? String
+                ?? "—"
+            return InstalledPackage(name: token, version: version, kind: .cask, installedOnRequest: true)
+        }
+
+        return (formulae + casks)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// Count of newline-delimited entries from a brew subcommand, ignoring

@@ -13,9 +13,8 @@
 //! variant and shown verbatim in the Activity drawer — `friendlify` only
 //! drives the toast.
 //!
-//! **Polish, not a rules engine.** Keep the catalog tiny (three or four
-//! patterns max). When in doubt, return `None` and let the generic error
-//! surface unchanged.
+//! **Polish, not a rules engine.** Keep the catalog tiny and conservative.
+//! When in doubt, return `None` and let the generic error surface unchanged.
 
 /// Return a friendly one-sentence message if `stderr_excerpt` matches a known
 /// upstream-bug pattern for the given `command`. Returns `None` when nothing
@@ -114,7 +113,76 @@ pub fn friendlify(stderr_excerpt: &str, command: &str) -> Option<String> {
         );
     }
 
+    // Pattern 5 — a cask installer/remover invoked sudo, but brew-browser runs
+    // brew without an interactive terminal, so sudo cannot prompt for an admin
+    // password. Real Docker Desktop shape:
+    //
+    //   sudo: a terminal is required to read the password; either use the -S
+    //   option to read from standard input or configure an askpass helper
+    //   sudo: a password is required
+    //
+    // This is expected for some casks that install or remove privileged helper
+    // tools. It is not warning-only and not a brew-browser bug; the user needs
+    // to run the same brew command in Terminal, where macOS/sudo can prompt.
+    if sudo_password_prompt_required(stderr_excerpt) {
+        if let Some(token) = sudo_cask_token(stderr_excerpt, command) {
+            return Some(format!(
+                "The cask `{token}` needs an administrator password, but \
+                 brew-browser runs brew without an interactive terminal so sudo \
+                 cannot prompt here. Run this in Terminal: `brew upgrade --cask \
+                 {token}`, then refresh brew-browser."
+            ));
+        }
+        return Some(
+            "This Homebrew cask needs an administrator password, but \
+             brew-browser runs brew without an interactive terminal so sudo \
+             cannot prompt here. Run the cask upgrade in Terminal, then refresh \
+             brew-browser."
+                .to_string(),
+        );
+    }
+
     None
+}
+
+fn sudo_password_prompt_required(stderr_excerpt: &str) -> bool {
+    stderr_excerpt.contains("sudo: a terminal is required to read the password")
+        || stderr_excerpt.contains("sudo: a password is required")
+        || stderr_excerpt.contains("sudo: no tty present and no askpass program specified")
+}
+
+fn sudo_cask_token(stderr_excerpt: &str, command: &str) -> Option<String> {
+    token_from_brew_error(stderr_excerpt).or_else(|| token_from_command(command))
+}
+
+fn token_from_brew_error(stderr_excerpt: &str) -> Option<String> {
+    stderr_excerpt.lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix("Error: ")?;
+        let token = rest.split(':').next()?.trim();
+        valid_cask_token(token).then(|| token.to_string())
+    })
+}
+
+fn token_from_command(command: &str) -> Option<String> {
+    let mut saw_action = false;
+    for part in command.split_whitespace() {
+        if !saw_action {
+            saw_action = part == "upgrade" || part == "install" || part == "reinstall";
+            continue;
+        }
+        if part.starts_with('-') {
+            continue;
+        }
+        return valid_cask_token(part).then(|| part.to_string());
+    }
+    None
+}
+
+fn valid_cask_token(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
 /// True when a non-zero `brew upgrade`/`install` exit carries ONLY non-fatal
@@ -132,8 +200,7 @@ pub fn friendlify(stderr_excerpt: &str, command: &str) -> Option<String> {
 /// the normal failure surface, so we never hide a real failure that lacks a
 /// recognized warning marker.
 pub fn upgrade_warnings_only(stderr_excerpt: &str, command: &str) -> bool {
-    let is_upgrade_or_install =
-        command.contains("upgrade") || command.contains("install");
+    let is_upgrade_or_install = command.contains("upgrade") || command.contains("install");
     if !is_upgrade_or_install {
         return false;
     }
@@ -148,6 +215,9 @@ pub fn upgrade_warnings_only(stderr_excerpt: &str, command: &str) -> bool {
         "Download failed",
         "Could not resolve host",
         "has already locked", // concurrent lock — handled as an env. failure
+        "sudo: a terminal is required to read the password",
+        "sudo: a password is required",
+        "sudo: no tty present and no askpass program specified",
         "Please report this issue:",
         "Homebrew::Bundle::Brew::Topo",
         "checksum does not match",
@@ -192,6 +262,12 @@ These open issues may also help:
   https://github.com/Homebrew/brew/issues
 "#;
 
+    const REAL_SUDO_PASSWORD_STDERR: &str = r#"==> Removing launchctl service `com.docker.vmnetd`
+sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper
+sudo: a password is required
+Error: docker-desktop: Failure while executing; `/usr/bin/sudo -E -- /usr/bin/xargs -0 -- /bin/rm -r -f --` exited with 1.
+"#;
+
     // ---- positive matches ----
 
     #[test]
@@ -212,7 +288,10 @@ These open issues may also help:
     fn topo_sort_pattern_matches_on_bundle_install() {
         // Same class of bug; bundle install can hit the same topo path.
         let msg = friendlify(REAL_TOPO_STDERR, "brew bundle install --file=/tmp/x");
-        assert!(msg.is_some(), "topo-sort pattern should match on `bundle install`");
+        assert!(
+            msg.is_some(),
+            "topo-sort pattern should match on `bundle install`"
+        );
     }
 
     #[test]
@@ -223,6 +302,27 @@ These open issues may also help:
             msg.contains("docs.brew.sh/Troubleshooting"),
             "friendly msg should link to brew troubleshooting docs; got {msg:?}"
         );
+    }
+
+    #[test]
+    fn sudo_password_prompt_pattern_matches() {
+        let msg = friendlify(REAL_SUDO_PASSWORD_STDERR, "brew upgrade docker-desktop")
+            .expect("sudo password pattern should match real cask stderr");
+        assert!(
+            msg.contains("administrator password")
+                && msg.contains("Terminal")
+                && msg.contains("docker-desktop")
+                && msg.contains("brew upgrade --cask docker-desktop"),
+            "friendly msg should explain that Terminal/admin prompt is required; got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn sudo_password_prompt_falls_back_to_command_token() {
+        let stderr = "sudo: a password is required\n";
+        let msg = friendlify(stderr, "brew upgrade --cask docker-desktop")
+            .expect("sudo password pattern should match command-only stderr");
+        assert!(msg.contains("brew upgrade --cask docker-desktop"), "{msg}");
     }
 
     // ---- non-matches ----
@@ -382,14 +482,31 @@ These open issues may also help:
     }
 
     #[test]
+    fn upgrade_warnings_only_false_on_sudo_password_prompt() {
+        let mixed = format!(
+            "Warning: The post-install step did not complete successfully\n{REAL_SUDO_PASSWORD_STDERR}"
+        );
+        assert!(!upgrade_warnings_only(
+            &mixed,
+            "brew upgrade docker-desktop"
+        ));
+    }
+
+    #[test]
     fn upgrade_warnings_only_gated_to_upgrade_install() {
         // Same warning text on a non-upgrade command must not classify.
-        assert!(!upgrade_warnings_only(WARN_POSTINSTALL, "brew services list"));
+        assert!(!upgrade_warnings_only(
+            WARN_POSTINSTALL,
+            "brew services list"
+        ));
     }
 
     #[test]
     fn upgrade_warnings_only_false_when_no_marker() {
-        assert!(!upgrade_warnings_only("✔︎ Bottle foo (1.0)\n", "brew upgrade"));
+        assert!(!upgrade_warnings_only(
+            "✔︎ Bottle foo (1.0)\n",
+            "brew upgrade"
+        ));
     }
 
     // ---- robustness / fuzz (no panic on adversarial input) ----
@@ -412,7 +529,13 @@ These open issues may also help:
         inputs.push((0u8..=255).map(|b| b as char).collect()); // all Latin-1 code points
         inputs.push("\u{0}\u{1}\u{2}\u{7f}control".into());
 
-        let commands = ["", "brew upgrade", "brew install x", "brew services start y", "brew bundle dump"];
+        let commands = [
+            "",
+            "brew upgrade",
+            "brew install x",
+            "brew services start y",
+            "brew bundle dump",
+        ];
         for inp in &inputs {
             for cmd in commands {
                 // Sole assertion is "returns without panicking".
