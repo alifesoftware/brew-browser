@@ -22,6 +22,12 @@ struct FriendlifyTests {
     """
     static let launchd = "Error: Could not find service \"ollama\" in domain for current user (gui/501/16).\nTry running launchctl bootstrap under the right domain, or move the plist to ~/Library/LaunchAgents.\n"
     static let locked = "Error: A `brew upgrade` process has already locked /opt/homebrew/Cellar/ca-certificates.\nPlease wait for it to finish or terminate it to continue.\n"
+    static let sudoPassword = """
+    ==> Removing launchctl service `com.docker.vmnetd`
+    sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper
+    sudo: a password is required
+    Error: docker-desktop: Failure while executing; `/usr/bin/sudo -E -- /usr/bin/xargs -0 -- /bin/rm -r -f --` exited with 1.
+    """
 
     @Test func topoMatchesOnBundle() {
         let msg = BrewErrorPatterns.friendlify(stderr: Self.topo, command: "brew bundle dump --file=/tmp/x --force")
@@ -51,6 +57,22 @@ struct FriendlifyTests {
     @Test func lockedMatches() {
         let msg = BrewErrorPatterns.friendlify(stderr: Self.locked, command: "brew upgrade")
         #expect(msg?.contains("Another Homebrew process") == true)
+    }
+
+    @Test func sudoPasswordPromptMatches() {
+        let msg = BrewErrorPatterns.friendlify(stderr: Self.sudoPassword, command: "brew upgrade docker-desktop")
+        #expect(msg?.contains("administrator password") == true)
+        #expect(msg?.contains("Terminal") == true)
+        #expect(msg?.contains("docker-desktop") == true)
+        #expect(msg?.contains("brew upgrade --cask docker-desktop") == true)
+    }
+
+    @Test func sudoPasswordPromptFallsBackToCommandToken() {
+        let msg = BrewErrorPatterns.friendlify(
+            stderr: "sudo: a password is required\n",
+            command: "brew upgrade --cask docker-desktop"
+        )
+        #expect(msg?.contains("brew upgrade --cask docker-desktop") == true)
     }
 
     @Test func genericFailureFallsThrough() {
@@ -93,6 +115,11 @@ struct UpgradeWarningsTests {
     @Test func falseOnLock() {
         let locked = "Error: A `brew upgrade` process has already locked /opt/homebrew/Cellar/x.\n"
         #expect(!BrewErrorPatterns.upgradeWarningsOnly(stderr: locked, command: "brew upgrade"))
+    }
+
+    @Test func falseOnSudoPasswordPrompt() {
+        let mixed = "Warning: The post-install step did not complete successfully\n" + FriendlifyTests.sudoPassword
+        #expect(!BrewErrorPatterns.upgradeWarningsOnly(stderr: mixed, command: "brew upgrade docker-desktop"))
     }
 
     @Test func gatedToUpgradeInstall() {

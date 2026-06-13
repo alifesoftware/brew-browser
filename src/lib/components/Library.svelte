@@ -14,7 +14,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { categories } from "$lib/stores/categories.svelte";
   import { discover } from "$lib/stores/discover.svelte";
-  import { library, type LibraryFilter } from "$lib/stores/library.svelte";
+  import { library, isManual, isDependencyOnly, type LibraryFilter } from "$lib/stores/library.svelte";
   import { enrichment } from "$lib/stores/enrichment.svelte";
   import { vulnerabilities } from "$lib/stores/vulnerabilities.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
@@ -32,11 +32,14 @@
   // when the feature is enabled. Adding it unconditionally would show a
   // dead filter pill (always 0) to users who never opted in, which is
   // worse than not surfacing it at all.
+  // Feature #3 — "manual"/"dependency" sit after "outdated". They key on
+  // per-keg brew flags carried on `Package` and apply to formulae (which
+  // exist on Linux), so they are NOT in the isLinux drop list below.
   // Linux: casks don't exist there, so the Casks pill (always 0) is dropped.
   let libraryFilters = $derived.by<LibraryFilter[]>(() => {
     const base: LibraryFilter[] = vulnerabilities.enabled
-      ? ["all", "formulae", "casks", "outdated", "vulnerable"]
-      : ["all", "formulae", "casks", "outdated"];
+      ? ["all", "formulae", "casks", "outdated", "manual", "dependency", "vulnerable"]
+      : ["all", "formulae", "casks", "outdated", "manual", "dependency"];
     return base.filter((f) => !(isLinux && f === "casks"));
   });
 
@@ -50,6 +53,12 @@
       case "formulae": base = packages.formulae; break;
       case "casks":    base = packages.casks; break;
       case "outdated": base = packages.outdated; break;
+      // Feature #3 — Manual = installed_on_request; Dependency = installed
+      // as a dependency and NOT on request (so a both-flags-true package
+      // counts as Manual only, never Dependency). Predicates are shared
+      // with the pill counts below via the library store.
+      case "manual":     base = packages.all.filter(isManual); break;
+      case "dependency": base = packages.all.filter(isDependencyOnly); break;
       case "vulnerable":
         // v0.5.0 — packages with at least one known CVE. The pill is
         // gated to only render when vuln scanning is enabled, but the
@@ -165,9 +174,13 @@
       {#each libraryFilters as f (f)}
         {@const count = f === "outdated"
           ? packages.outdated.length
-          : f === "vulnerable"
-            ? vulnerabilities.severityCounts.vulnerablePackages
-            : null}
+          : f === "manual"
+            ? packages.all.filter(isManual).length
+            : f === "dependency"
+              ? packages.all.filter(isDependencyOnly).length
+              : f === "vulnerable"
+                ? vulnerabilities.severityCounts.vulnerablePackages
+                : null}
         <button
           role="tab"
           aria-selected={library.filter === f}

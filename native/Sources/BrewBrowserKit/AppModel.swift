@@ -38,6 +38,8 @@ enum LibraryFilter: String, CaseIterable, Identifiable, Hashable {
     case formulae   = "Formulae"
     case casks      = "Casks"
     case outdated   = "Outdated"
+    case manual     = "Manual"
+    case dependency = "Dependency"
     case vulnerable = "Vulnerable"
 
     var id: String { rawValue }
@@ -62,6 +64,11 @@ struct LibraryRow: Identifiable, Hashable, Sendable {
     let maxSeverity: VulnSeverity?
     /// Number of known findings (any severity) — backs the dot's hover tooltip.
     let vulnCount: Int
+    /// Deprecation/disabled baseline, enriched from the bundled catalog by token.
+    /// Flags-only here (the catalog carries no replacement) — the detail panel
+    /// adds the replacement from brew info. Clean when the catalog isn't loaded
+    /// or the package isn't deprecated/disabled (no badge then). Feature #2.
+    let deprecation: DeprecationStatus
 
     /// Comparable proxy for sorting the Outdated column (`Bool` isn't
     /// `Comparable`). Outdated rows sort high so descending surfaces them first.
@@ -86,6 +93,9 @@ struct DiscoverRow: Identifiable, Hashable, Sendable {
     let maxSeverity: VulnSeverity?
     /// Number of known findings (any severity) — backs the dot's hover tooltip.
     let vulnCount: Int
+    /// Deprecation/disabled baseline from the catalog (flags-only; the catalog
+    /// is the row source for Discover, so it has no replacement). Feature #2.
+    let deprecation: DeprecationStatus
 
     var installedRank: Int { isInstalled ? 1 : 0 }
 }
@@ -184,6 +194,10 @@ public final class AppModel {
             case .formulae:   guard pkg.kind == .formula else { return nil }
             case .casks:      guard pkg.kind == .cask else { return nil }
             case .outdated:   guard outdatedSet.contains(pkg.name) else { return nil }
+            // Manual = installed on request; Dependency = a formula NOT on request
+            // (casks are always on-request, so never appear under Dependency) (#3).
+            case .manual:     guard pkg.installedOnRequest else { return nil }
+            case .dependency: guard pkg.kind == .formula && !pkg.installedOnRequest else { return nil }
             case .vulnerable: guard (vuln?.total ?? 0) > 0 else { return nil }
             }
             if !q.isEmpty, !pkg.name.localizedCaseInsensitiveContains(q) { return nil }
@@ -201,7 +215,8 @@ public final class AppModel {
                 isOutdated: outdatedSet.contains(pkg.name),
                 summary: showSummary ? (entry?.summary ?? "") : "",
                 maxSeverity: (vuln?.total ?? 0) > 0 ? vuln?.maxSeverity : nil,
-                vulnCount: vuln?.total ?? 0
+                vulnCount: vuln?.total ?? 0,
+                deprecation: deprecationStatus(pkg.name, pkg.kind)
             )
         }
     }
@@ -218,6 +233,8 @@ public final class AppModel {
         case .formulae:   return installed.lazy.filter { $0.kind == .formula }.count
         case .casks:      return installed.lazy.filter { $0.kind == .cask }.count
         case .outdated:   return outdatedNames.count
+        case .manual:     return installed.lazy.filter { $0.installedOnRequest }.count
+        case .dependency: return installed.lazy.filter { $0.kind == .formula && !$0.installedOnRequest }.count
         case .vulnerable: return vulnerableCount
         }
     }
@@ -236,7 +253,17 @@ public final class AppModel {
     var catalog: [CatalogPackage] = []
     var catalogLoading = false
     /// Selected category slug for the Discover filter; nil = All.
-    var discoverCategory: String? = nil
+    var discoverCategory: String? = nil {
+        didSet {
+            // A new category invalidates any drilled-into sub-group selection.
+            if discoverCategory != oldValue { discoverSubgroupKey = nil }
+        }
+    }
+    /// Active co-occurrence sub-group within the selected category (feature #6).
+    /// nil = show every member of the category (flat). Set by tapping a sub-group
+    /// chip; cleared whenever the category changes. Only meaningful when
+    /// ``discoverSubgroups`` is non-empty.
+    var discoverSubgroupKey: String? = nil
     /// Sort order for the Discover `Table`.
     var discoverSort: [KeyPathComparator<DiscoverRow>] = [
         KeyPathComparator(\DiscoverRow.name, order: .forward)
@@ -251,6 +278,20 @@ public final class AppModel {
     /// count, descending). Empty until the bundled category catalog is parsed.
     var categoryTiles: [CategoryTile] {
         categoryCatalog?.tiles() ?? []
+    }
+
+    /// Co-occurrence sub-groups for the active Discover category (feature #6).
+    /// Surfaces ONLY when exactly one category is selected AND no search text is
+    /// narrowing the list — multi-narrowed / searched views stay flat (the same
+    /// rule as the Tauri shell). Empty otherwise. NOT a true taxonomy: each
+    /// bucket is a co-assigned category slug (or "General" for solo members);
+    /// see ``CategoryCatalog/subgroups(in:)``.
+    var discoverSubgroups: [CategorySubgroup] {
+        guard let slug = discoverCategory,
+              catalog.isEmpty == false,
+              globalQuery.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return [] }
+        return categoryCatalog?.subgroups(in: slug) ?? []
     }
 
     /// Active-catalog freshness summary (bundled vs user-refreshed copy). Loaded
@@ -287,14 +328,22 @@ public final class AppModel {
     /// reuses `globalQuery`, never adds its own field — see libraryRows.)
     var discoverRows: [DiscoverRow] {
         guard !catalog.isEmpty else { return [] }
-        let installedIDs = Set(installed.map { "\($0.kind.rawValue):\($0.name)" })
         let showSummary = settings.aiFeaturesVisible
         let showVulns = settings.vulnerabilityScanningAllowed
         let q = globalQuery.trimmingCharacters(in: .whitespaces)
         let cat = discoverCategory
+        // Drill into a co-occurrence sub-group only when one is active AND the
+        // list isn't otherwise narrowed by search (sub-groups are defined only
+        // for a single selected category — see discoverSubgroups). Feature #6.
+        let subKey = (cat != nil && q.isEmpty) ? discoverSubgroupKey : nil
 
         return catalog.compactMap { pkg in
             if let cat, !(categoryCatalog?.isMember(token: pkg.token, kind: pkg.kind, slug: cat) ?? false) {
+                return nil
+            }
+            if let cat, let subKey,
+               !(categoryCatalog?.memberInSubgroup(token: pkg.token, kind: pkg.kind,
+                                                    slug: cat, subgroupKey: subKey) ?? false) {
                 return nil
             }
             if !q.isEmpty,
@@ -313,9 +362,10 @@ public final class AppModel {
                 kind: pkg.kind,
                 homepage: pkg.homepage,
                 summary: showSummary ? (entry?.summary ?? pkg.desc) : pkg.desc,
-                isInstalled: installedIDs.contains("\(pkg.kind.rawValue):\(pkg.token)"),
+                isInstalled: isPackageInstalled(token: pkg.token, kind: pkg.kind),
                 maxSeverity: (vuln?.total ?? 0) > 0 ? vuln?.maxSeverity : nil,
-                vulnCount: vuln?.total ?? 0
+                vulnCount: vuln?.total ?? 0,
+                deprecation: pkg.deprecation
             )
         }
     }
@@ -351,8 +401,13 @@ public final class AppModel {
         // descriptions/versions blank.
         var byID: [String: CatalogPackage] = [:]
         byID.reserveCapacity(catalog.count)
-        for p in catalog { byID[p.id] = p }
+        var depByID: [String: DeprecationStatus] = [:]
+        for p in catalog {
+            byID[p.id] = p
+            if !p.deprecation.isClean { depByID[p.id] = p.deprecation }
+        }
         catalogByID = byID
+        deprecationByID = depByID
         catalogLoading = false
     }
 
@@ -388,8 +443,13 @@ public final class AppModel {
             catalog = await catalogService.all()
             var byID: [String: CatalogPackage] = [:]
             byID.reserveCapacity(catalog.count)
-            for p in catalog { byID[p.id] = p }
+            var depByID: [String: DeprecationStatus] = [:]
+            for p in catalog {
+                byID[p.id] = p
+                if !p.deprecation.isClean { depByID[p.id] = p.deprecation }
+            }
             catalogByID = byID
+            deprecationByID = depByID
             catalogSummary = summary
             // Rebuild the dashboard category breakdown against the fresh catalog.
             if !installed.isEmpty {
@@ -413,11 +473,41 @@ public final class AppModel {
     /// token+kind → catalog package, for joining desc/version/homepage onto
     /// Trending rows. Populated by `loadCatalog` (not lazily during render).
     private var catalogByID: [String: CatalogPackage] = [:]
+    /// "kind:token" → catalog deprecation status, for badging Library rows
+    /// (which are `brew list` `InstalledPackage`s with no catalog flags of their
+    /// own) and Discover rows from the offline baseline. Built alongside
+    /// `catalogByID` in `loadCatalog`/`refreshCatalogFromBrewSh`. The native
+    /// analogue of the Tauri catalog store's `deprecatedBy*`/`disabledBy*` maps.
+    private var deprecationByID: [String: DeprecationStatus] = [:]
+
+    /// Catalog deprecation/disabled status for a token+kind (offline baseline).
+    /// Bare-token fallback for tap-qualified names, mirroring `catalogLookup`.
+    /// Returns a clean status (no badge) when the catalog isn't loaded or the
+    /// package isn't flagged. The native analogue of the Tauri `statusOf`.
+    func deprecationStatus(_ token: String, _ kind: InstalledPackage.Kind) -> DeprecationStatus {
+        if let hit = deprecationByID["\(kind.rawValue):\(token)"] { return hit }
+        let bare = Self.bareToken(token)
+        if bare != token, let hit = deprecationByID["\(kind.rawValue):\(bare)"] { return hit }
+        return DeprecationStatus()
+    }
     /// Homebrew analytics report tap formulae fully-qualified (`user/tap/name`),
     /// but the bundled catalog + enrichment are keyed by the bare name. Returns
     /// the last `/`-segment; bare tokens pass through unchanged.
     static func bareToken(_ token: String) -> String {
         token.split(separator: "/").last.map(String.init) ?? token
+    }
+
+    func installedPackageMatching(token: String, kind: InstalledPackage.Kind) -> InstalledPackage? {
+        if let exact = installed.first(where: { $0.kind == kind && $0.name == token }) {
+            return exact
+        }
+        let bare = Self.bareToken(token)
+        guard bare != token else { return nil }
+        return installed.first { $0.kind == kind && $0.name == bare }
+    }
+
+    func isPackageInstalled(token: String, kind: InstalledPackage.Kind) -> Bool {
+        installedPackageMatching(token: token, kind: kind) != nil
     }
 
     private func catalogLookup(_ token: String, _ kind: InstalledPackage.Kind) -> CatalogPackage? {
@@ -444,7 +534,6 @@ public final class AppModel {
 
     var trendingRows: [TrendingRow] {
         guard !trendingEntries.isEmpty else { return [] }
-        let installedIDs = Set(installed.map { "\($0.kind.rawValue):\($0.name)" })
         let showSummary = settings.aiFeaturesVisible
         let showVulns = settings.vulnerabilityScanningAllowed
         return trendingEntries.map { e in
@@ -464,7 +553,7 @@ public final class AppModel {
                 summary: showSummary ? (entry?.summary ?? cat?.desc ?? "")
                                      : (cat?.desc ?? ""),
                 installCount: e.installCount,
-                isInstalled: installedIDs.contains(id),
+                isInstalled: isPackageInstalled(token: e.token, kind: e.kind),
                 velocity: e.velocity,                 // computed from analytics windows
                 sparkline: sparklineIndex[id] ?? [],  // opt-in enhanced overlay
                 maxSeverity: (vuln?.total ?? 0) > 0 ? vuln?.maxSeverity : nil,
@@ -582,6 +671,22 @@ public final class AppModel {
     /// Clear the active Library category filter (the chip's ✕).
     func clearLibraryCategory() {
         libraryCategory = nil
+    }
+
+    /// Open the Activity history — the "more in Activity →" deep-link from the
+    /// Dashboard "Recent changes" card. The full change history lives there; the
+    /// card only previews the most recent few.
+    func openActivity() {
+        selection = .activity
+    }
+
+    /// The most-recent package changes (installed / upgraded / uninstalled),
+    /// derived purely from the existing persisted job history — no new data, no
+    /// new subprocess. Drives the Dashboard "Recent changes" card; capped to a
+    /// short preview (the full list lives in Activity). Mirrors the Tauri
+    /// `recentChanges(jobs)` contract (`RecentChanges.swift`).
+    var recentChangesPreview: [RecentChange] {
+        Array(RecentChanges.recentChanges(jobs).prefix(6))
     }
 
     /// Open Library filtered to packages with known vulnerabilities. Used by the
@@ -738,6 +843,7 @@ public final class AppModel {
     var detailInfo: PackageInfo?
     var detailEnrichment: EnrichmentEntry?
     var detailCategories: [String] = []        // category labels for this package
+    var detailDependents: [ReverseDependent] = []  // catalog packages that depend on this one
     var detailLoading = false
     var detailError: String?
     /// True while any package action (install/upgrade/uninstall) is running —
@@ -1052,16 +1158,16 @@ public final class AppModel {
     /// unknown until the first probe, then missing/running/ready.
     enum BrewHealth { case ready, running, missing, unknown }
 
-    /// Derived brew-environment health. There's no separate doctor probe in the
-    /// native build — `loadDashboard` already resolves `brewVersion`/`brewPrefix`
-    /// (and surfaces failures in `loadError`), so we read those: a non-placeholder
-    /// version with no load error = ready; a load error = missing; an in-flight
-    /// brew job = running; nothing resolved yet = unknown. Matches the Tauri
-    /// ready/running/missing/unknown ladder.
+    /// Derived brew-environment health. A library/detail command can fail while
+    /// Homebrew itself is present (for example a cask that requires sudo), so do
+    /// not collapse every `loadError` into "brew not found". The missing state is
+    /// reserved for the launch resolver or a placeholder version with a load
+    /// error; a known version/prefix stays ready.
     var brewHealth: BrewHealth {
-        if loadError != nil { return .missing }
         if jobs.contains(where: { $0.status == .running }) { return .running }
         if !dashboardLoaded && brewVersion == "—" { return .unknown }
+        if brewMissing { return .missing }
+        if brewVersion == "—", loadError != nil { return .missing }
         return brewVersion == "—" ? .missing : .ready
     }
 
@@ -1081,7 +1187,7 @@ public final class AppModel {
         var base: String
         switch brewHealth {
         case .unknown: base = "Checking Homebrew…"
-        case .missing: base = loadError ?? "Homebrew not found on PATH."
+        case .missing: base = "Homebrew not found on PATH."
         default:       base = "Homebrew \(brewVersion) · prefix \(brewPrefix)"
         }
         let running = jobs.filter { $0.status == .running }.count
@@ -1116,9 +1222,10 @@ public final class AppModel {
         isLoading = true
         loadError = nil
         do {
-            // Library lists BOTH formulae and casks (the Casks filter was empty
-            // because we only loaded formulae). Dashboard's formula/cask counts
-            // come from their own brew calls in loadDashboard.
+            // Library lists BOTH formulae and casks from the same source Tauri
+            // uses: `brew info --installed --json=v2`. That payload carries
+            // formula `installed_on_request`; casks are tagged on-request by
+            // the parser, matching Tauri's cask rule.
             installed = try await brew.listInstalledAll()
             formulaCount = installed.lazy.filter { $0.kind == .formula }.count
             caskCount = installed.lazy.filter { $0.kind == .cask }.count
@@ -1190,14 +1297,39 @@ public final class AppModel {
         await refreshLiveCategoriesIfNewer()
     }
 
+    /// Deprecation status for the OPEN detail package: prefer the brew-info
+    /// status (the only source with the "use X instead" replacement), falling
+    /// back to the offline catalog baseline while `brew info` is still loading or
+    /// when the package wasn't found there. Mirrors the Tauri PackageDetail,
+    /// where the row baseline shows immediately and the replacement appears once
+    /// brew info resolves. Clean (no notice) when neither source flags it.
+    var detailDeprecation: DeprecationStatus {
+        if let info = detailInfo, !info.deprecation.isClean { return info.deprecation }
+        guard let pkg = detailPackage else { return DeprecationStatus() }
+        return deprecationStatus(pkg.name, pkg.kind)
+    }
+
     // MARK: - Package detail
 
     /// Open the inspector for a package and load its full detail.
     func openDetail(_ pkg: InstalledPackage) {
-        detailPackage = pkg
+        let detailPkg = packageForDetail(pkg)
+        detailPackage = detailPkg
         detailSection = selection
         showDetail = true
-        Task { await loadDetail(pkg) }
+        Task { await loadDetail(detailPkg) }
+    }
+
+    func packageForDetail(_ pkg: InstalledPackage) -> InstalledPackage {
+        guard let installed = installedPackageMatching(token: pkg.name, kind: pkg.kind) else {
+            return pkg
+        }
+        return InstalledPackage(
+            name: pkg.name,
+            version: installed.version,
+            kind: pkg.kind,
+            installedOnRequest: installed.installedOnRequest
+        )
     }
 
     /// Close the inspector if it was opened from a different section than the one
@@ -1213,6 +1345,7 @@ public final class AppModel {
         detailInfo = nil
         detailEnrichment = nil
         detailCategories = []
+        detailDependents = []
         detailVulns = []
         detailVulnsScanned = false
         detailTrend = nil
@@ -1239,6 +1372,14 @@ public final class AppModel {
         // Bundled, synchronous-ish lookups first (instant).
         detailEnrichment = settings.aiFeaturesVisible ? enrichmentEntry(for: pkg.name) : nil
         detailCategories = categoryCatalog?.categoryLabels(for: pkg.name, kind: pkg.kind) ?? []
+
+        // Reverse dependents — packages in the bundled catalog that depend on
+        // this one (pure catalog-graph inversion, no subprocess). Casks are
+        // never depended-on, so a cask's reverse set is always empty.
+        detailDependents = []
+        let dependents = await catalogService.reverseDependents(of: pkg.name)
+        guard detailPackage?.id == pkg.id else { return }
+        detailDependents = dependents
 
         do {
             let info: PackageInfo
@@ -1633,8 +1774,8 @@ public final class AppModel {
         var args = ["upgrade"]
         if pkg.kind == .cask { args.append("--cask") }
         args.append(pkg.name)
-        await startJob("Upgrading \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
-        if let pkg = detailPackage { await loadDetail(pkg) }
+        let ok = await startJob("Upgrading \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
+        if ok, let pkg = detailPackage { await loadDetail(pkg) }
     }
 
     func uninstallDetail() async {
@@ -1643,7 +1784,7 @@ public final class AppModel {
         if pkg.kind == .cask { args.append("--cask") }
         args.append(pkg.name)
         let ok = await startJob("Uninstalling \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
-        if ok { closeDetail() } else if let pkg = detailPackage { await loadDetail(pkg) }
+        if ok { closeDetail() }
     }
 
     /// Install the detail package (Discover → uninstalled packages). Reloads
@@ -1655,8 +1796,8 @@ public final class AppModel {
         var args = ["install"]
         if pkg.kind == .cask { args.append("--cask") }
         args.append(pkg.name)
-        await startJob("Installing \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
-        if let pkg = detailPackage { await loadDetail(pkg) }
+        let ok = await startJob("Installing \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
+        if ok, let pkg = detailPackage { await loadDetail(pkg) }
     }
 
     // MARK: - Bulk actions (Dashboard Updates card)
@@ -1810,7 +1951,12 @@ public final class AppModel {
             status: .failed,
             lines: [ActivityLine(stream: .stderr, text: error.localizedDescription)],
             exitCode: nil,
-            durationMs: nil
+            durationMs: nil,
+            friendlyFailureMessage: BrewErrorPatterns.friendlify(
+                stderr: error.localizedDescription,
+                command: "brew services \(verb.rawValue) \(name)"
+            ),
+            progress: nil
         )
         jobs.insert(job, at: 0)
         if jobs.count > Self.maxJobs { jobs.removeLast(jobs.count - Self.maxJobs) }
@@ -1831,7 +1977,9 @@ public final class AppModel {
             id: jobId, label: label,
             command: "brew " + args.joined(separator: " "),
             startedAt: startedAt, status: .running, lines: [],
-            exitCode: nil, durationMs: nil
+            exitCode: nil, durationMs: nil,
+            friendlyFailureMessage: nil,
+            progress: nil
         )
         // Don't yank the drawer away from a job the user is actively watching:
         // only auto-focus the new job if nothing is shown or the shown job has
@@ -1881,19 +2029,50 @@ public final class AppModel {
                 ok = true
             }
         }
+        var finishedJob: ActivityJob?
         if let idx = jobs.firstIndex(where: { $0.id == jobId }) {
+            let stderrText = jobs[idx].lines
+                .filter { $0.stream == .stderr }
+                .map(\.text)
+                .joined(separator: "\n")
+            let command = "brew " + args.joined(separator: " ")
             // exit 130/143 = SIGINT/SIGTERM → treat as canceled.
             jobs[idx].status = ok ? .succeeded : (canceled ? .canceled : .failed)
             jobs[idx].exitCode = exit
             jobs[idx].durationMs = Int((Date().timeIntervalSince1970 - startedAt) * 1000)
+            jobs[idx].friendlyFailureMessage = (!ok && !canceled)
+                ? BrewErrorPatterns.friendlify(stderr: stderrText, command: command)
+                : nil
             jobs[idx].progress = nil   // clear live progress once finished
+            finishedJob = jobs[idx]
         }
         // Background completion → macOS notification (opt-in; foreground uses
         // the Activity drawer). No-op unless enabled + app not frontmost.
         NotificationService.notifyTaskFinished(label: label, succeeded: ok, canceled: canceled)
         persistJobs()
-        await refresh()
+        if let finishedJob, finishedJob.status == .failed {
+            focusFailedJobInDrawer(finishedJob.id)
+        }
+        if Self.shouldRefreshAfterJob(succeeded: ok, canceled: canceled) {
+            await refresh()
+        }
         return ok
+    }
+
+    static func shouldRefreshAfterJob(succeeded: Bool, canceled: Bool) -> Bool {
+        succeeded && !canceled
+    }
+
+    static func failureNoticeTitle(for label: String) -> String {
+        if label.hasPrefix("Upgrading ") { return "Upgrade failed" }
+        if label.hasPrefix("Installing ") { return "Install failed" }
+        if label.hasPrefix("Uninstalling ") { return "Uninstall failed" }
+        return "\(label) failed"
+    }
+
+    private func focusFailedJobInDrawer(_ jobId: UUID) {
+        activeJobId = jobId
+        drawerOpen = true
     }
 
     /// Cancel a running job (SIGTERM its brew process).

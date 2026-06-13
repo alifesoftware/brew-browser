@@ -27,10 +27,18 @@ struct PackageDetailView: View {
     /// still say installed:null — the installed list reflects reality first, so
     /// it's the primary signal here. Drives the footer's Install/Uninstall.
     private var isInstalled: Bool {
-        if model.installed.contains(where: { $0.name == pkg.name && $0.kind == pkg.kind }) {
+        if installedPackage != nil {
             return true
         }
         return info?.installedVersion != nil
+    }
+
+    private var installedPackage: InstalledPackage? {
+        model.installedPackageMatching(token: pkg.name, kind: pkg.kind)
+    }
+
+    private var installedOnRequest: Bool {
+        installedPackage?.installedOnRequest ?? pkg.installedOnRequest
     }
 
     var body: some View {
@@ -98,6 +106,7 @@ struct PackageDetailView: View {
                     if !model.detailCategories.isEmpty { categoriesRow }
                     if let tags = enrichment?.tags, !tags.isEmpty { tagsRow(tags) }
 
+                    deprecationCard
                     if AppSettings.shared.vulnerabilityScanningAllowed { securityCard }
                     serviceCard
                     if model.detailTrend != nil { trendCard }
@@ -106,6 +115,7 @@ struct PackageDetailView: View {
                     if AppSettings.shared.githubAllowed, model.detailRepoStats != nil { githubCard }
                     if let caveats = info?.caveats, !caveats.isEmpty { caveatsCard(caveats) }
                     dependenciesSection
+                    dependentsSection
                 }
             }
             .padding(16)
@@ -178,7 +188,25 @@ struct PackageDetailView: View {
         VStack(spacing: 0) {
             metaRow("Token", pkg.name, mono: true)
             Divider()
-            metaRow("Installed", info?.installedVersion ?? "Not installed")
+            HStack {
+                Text("Installed").foregroundStyle(.secondary)
+                    .frame(width: 90, alignment: .leading)
+                Text(info?.installedVersion ?? "Not installed")
+                    .textSelection(.enabled)
+                // Dependency indicator: a formula installed only as a dependency
+                // (not on request) — mirrors the Tauri detail badge. Casks are
+                // always on-request so never show this. Feature #3.
+                if isInstalled, pkg.kind == .formula, !installedOnRequest {
+                    Text("Dependency")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12), in: .capsule)
+                        .help("Installed as a dependency, not requested directly")
+                }
+                Spacer()
+            }
+            .padding(.vertical, 6)
             Divider()
             HStack {
                 Text("Latest").foregroundStyle(.secondary)
@@ -197,9 +225,29 @@ struct PackageDetailView: View {
             if let tap = info?.tap {
                 Divider(); metaRow("Tap", tap, mono: true)
             }
+            // On-disk size of the installed keg (feature #4). Rendered only when
+            // the package is installed and du succeeded — nil → no row (never a
+            // fabricated "0 B"). Lazily computed in BrewService.info().
+            if let bytes = info?.installedSizeBytes {
+                Divider(); metaRow("Size", Self.human(bytes))
+            }
         }
         .padding(12)
         .background(.quaternary, in: .rect(cornerRadius: 10))
+    }
+
+    /// Human byte formatting for the Size row — matches the Tauri Dashboard
+    /// `fmtBytes` thresholds EXACTLY for cross-shell parity: B (<1 KiB),
+    /// KB (1 decimal), MB (1 decimal), GB (2 decimals). Distinct from
+    /// `StorageCard.human`, which floors to whole MB and skips KB/B — the detail
+    /// panel needs the finer granularity (parity contract #4).
+    static func human(_ bytes: Int64) -> String {
+        let b = Double(bytes)
+        let kib = 1024.0, mib = 1_048_576.0, gib = 1_073_741_824.0
+        if b >= gib { return String(format: "%.2f GB", b / gib) }
+        if b >= mib { return String(format: "%.1f MB", b / mib) }
+        if b >= kib { return String(format: "%.1f KB", b / kib) }
+        return "\(bytes) B"
     }
 
     private func metaRow(_ label: String, _ value: String, mono: Bool = false) -> some View {
@@ -259,6 +307,66 @@ struct PackageDetailView: View {
     }
 
     // MARK: security
+
+    // MARK: deprecation
+
+    /// Deprecation / disabled notice — renders before the Security card, mirroring
+    /// the Tauri PackageDetail notice block. Shows nothing when the package is
+    /// clean (never a placeholder). The status prefers `brew info` (the only
+    /// source of the "use X instead" replacement) and falls back to the offline
+    /// catalog baseline while info loads. `disabled` wins over `deprecated`
+    /// (danger vs. warning tone). Reason/date strings are rendered verbatim. The
+    /// replacement, when present, is a tappable chip that re-opens the inspector
+    /// on that token (brew info re-fetches; an unknown token hits the existing
+    /// detail error path). Feature #2.
+    @ViewBuilder private var deprecationCard: some View {
+        let status = model.detailDeprecation
+        if let badge = status.badge {
+            let isDisabled = badge == .disabled
+            let tone: Color = isDisabled ? .red : .orange
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(isDisabled
+                         ? "This package is disabled and is no longer available — it will be removed."
+                         : "This package is deprecated and scheduled for removal. It still installs for now.")
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let reason = status.activeReason, !reason.isEmpty {
+                        Text(reason)
+                            .font(.callout).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    if let date = status.activeDate, !date.isEmpty {
+                        Text(isDisabled ? "Disabled: \(date)" : "Deprecated: \(date)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let replacement = status.activeReplacement, !replacement.isEmpty {
+                        HStack(spacing: 6) {
+                            Text("Use instead:").font(.callout).foregroundStyle(.secondary)
+                            Button {
+                                // Most replacements share the deprecated package's
+                                // kind (formula→formula, cask→cask); openDetail
+                                // re-fetches brew info and the bare-name retry +
+                                // error path cover a kind/tap mismatch.
+                                model.openDetail(InstalledPackage(name: replacement, version: "—", kind: pkg.kind))
+                            } label: {
+                                Text(replacement).font(.callout)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(.quaternary, in: .capsule)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 2)
+            } label: {
+                Label(badge.label, systemImage: isDisabled ? "xmark.octagon" : "exclamationmark.triangle")
+                    .foregroundStyle(tone)
+            }
+        }
+    }
 
     @ViewBuilder private var securityCard: some View {
         GroupBox {
@@ -594,6 +702,42 @@ struct PackageDetailView: View {
         }
     }
 
+    /// "Required by" — catalog packages that depend on this one (reverse edges of
+    /// the dependency graph, inverted from the same bundled catalog). Buttons
+    /// navigate to the dependent's detail, exactly like the Similar-packages
+    /// pills. Honest empty state: the whole section is omitted when nothing in
+    /// the catalog depends on this package. A DisclosureGroup keeps high-fan-in
+    /// targets (e.g. `openssl@3` with thousands of dependents) collapsible,
+    /// mirroring the Dependencies disclosure.
+    @ViewBuilder private var dependentsSection: some View {
+        let dependents = model.detailDependents
+        if !dependents.isEmpty {
+            DisclosureGroup("Required by (\(dependents.count))") {
+                FlowRow(spacing: 6) {
+                    ForEach(dependents) { dep in
+                        Button {
+                            model.openDetail(InstalledPackage(name: dep.name, version: "—", kind: dep.kind))
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(dep.name)
+                                if dep.edge != .required {
+                                    Text(dep.edge.rawValue)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                } else if dep.kind == .cask {
+                                    Image(systemName: "shippingbox").font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(.quaternary, in: .capsule)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: footer
 
     private var footer: some View {
@@ -683,6 +827,39 @@ struct SeverityDot: View {
             .fill(color)
             .frame(width: 8, height: 8)
             .help("\(count) known vulnerabilit\(count == 1 ? "y" : "ies") (highest: \(severity.rawValue)). Click row to see details.")
+    }
+}
+
+/// Small deprecation/disabled badge for a list row — sits next to the name in
+/// the Library/Discover name cell, beside the vulnerability `SeverityDot`.
+/// `disabled` wins over `deprecated` (the AppModel rows already encode that in
+/// `DeprecationStatus.badge`), so this view just renders the resolved kind:
+/// "Disabled" in red (the package is gone / about to be removed), "Deprecated"
+/// in amber (still installable, but on its way out). Mirrors the Tauri PackageRow
+/// deprecation Pill (danger/warning tone). Feature #2.
+struct DeprecationBadge: View {
+    let kind: DeprecationBadgeKind
+    /// Catalog reason, when present — surfaced in the hover tooltip only (the
+    /// row stays compact; the full notice lives in the detail panel).
+    var reason: String? = nil
+
+    private var color: Color { kind == .disabled ? .red : .orange }
+
+    var body: some View {
+        Text(kind.label)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(color.opacity(0.18), in: .capsule)
+            .foregroundStyle(color)
+            .help(tooltip)
+    }
+
+    private var tooltip: String {
+        let base = kind == .disabled
+            ? "Disabled — this package is no longer available and will be removed."
+            : "Deprecated — still installable, but scheduled for removal."
+        if let reason, !reason.isEmpty { return "\(base)\n\(reason)" }
+        return base
     }
 }
 

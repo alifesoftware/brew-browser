@@ -61,6 +61,30 @@ pub struct RawFormula {
     pub pinned: bool,
     #[serde(default)]
     pub outdated: bool,
+    /// Feature #2 — deprecation / disabled surface. `brew info` carries
+    /// the full shape including the replacement token (the catalog does
+    /// not). All `#[serde(default)]` so older brew JSON without these
+    /// fields parses unchanged.
+    #[serde(default)]
+    pub deprecated: bool,
+    #[serde(default)]
+    pub deprecation_date: Option<String>,
+    #[serde(default)]
+    pub deprecation_reason: Option<String>,
+    #[serde(default)]
+    pub deprecation_replacement_formula: Option<String>,
+    #[serde(default)]
+    pub deprecation_replacement_cask: Option<String>,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(default)]
+    pub disable_date: Option<String>,
+    #[serde(default)]
+    pub disable_reason: Option<String>,
+    #[serde(default)]
+    pub disable_replacement_formula: Option<String>,
+    #[serde(default)]
+    pub disable_replacement_cask: Option<String>,
     /// 30-day analytics installs, if present.
     #[serde(default)]
     pub analytics: Option<serde_json::Value>,
@@ -150,6 +174,29 @@ pub struct RawCask {
     pub pinned: bool,
     #[serde(default)]
     pub outdated: bool,
+    /// Feature #2 — deprecation / disabled surface (cask side). Same
+    /// shape as the formula record; the replacement may be either a
+    /// formula or a cask token.
+    #[serde(default)]
+    pub deprecated: bool,
+    #[serde(default)]
+    pub deprecation_date: Option<String>,
+    #[serde(default)]
+    pub deprecation_reason: Option<String>,
+    #[serde(default)]
+    pub deprecation_replacement_formula: Option<String>,
+    #[serde(default)]
+    pub deprecation_replacement_cask: Option<String>,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(default)]
+    pub disable_date: Option<String>,
+    #[serde(default)]
+    pub disable_reason: Option<String>,
+    #[serde(default)]
+    pub disable_replacement_formula: Option<String>,
+    #[serde(default)]
+    pub disable_replacement_cask: Option<String>,
     #[serde(default)]
     pub caveats: Option<String>,
     #[serde(default)]
@@ -185,11 +232,22 @@ pub struct RawOutdatedEntry {
 
 // ---------- Conversions: raw → DTO ----------
 
+/// Collapse a formula-replacement / cask-replacement pair into a single
+/// "use X instead" token. Both being non-null is impossible in practice
+/// (a package is deprecated in favour of exactly one successor), but the
+/// rule is deterministic regardless: prefer the formula token, fall back
+/// to the cask token, else `None`.
+fn collapse_replacement(formula: &Option<String>, cask: &Option<String>) -> Option<String> {
+    formula.clone().or_else(|| cask.clone())
+}
+
 impl RawFormula {
     pub fn to_package(&self) -> Package {
         let installed_first = self.installed.first();
         let installed_version = installed_first.map(|i| i.version.clone());
-        let installed_on_request = installed_first.map(|i| i.installed_on_request).unwrap_or(false);
+        let installed_on_request = installed_first
+            .map(|i| i.installed_on_request)
+            .unwrap_or(false);
         let installed_as_dependency = installed_first
             .map(|i| i.installed_as_dependency)
             .unwrap_or(false);
@@ -226,6 +284,20 @@ impl RawFormula {
             pinned: self.pinned,
             installed_on_request,
             installed_as_dependency,
+            deprecated: self.deprecated,
+            disabled: self.disabled,
+            deprecation_date: self.deprecation_date.clone(),
+            deprecation_reason: self.deprecation_reason.clone(),
+            disable_date: self.disable_date.clone(),
+            disable_reason: self.disable_reason.clone(),
+            deprecation_replacement: collapse_replacement(
+                &self.deprecation_replacement_formula,
+                &self.deprecation_replacement_cask,
+            ),
+            disable_replacement: collapse_replacement(
+                &self.disable_replacement_formula,
+                &self.disable_replacement_cask,
+            ),
             // Formulae are CLI tools — no icon to fetch. The frontend
             // renders a glyph fallback for the `None` variant.
             icon_source: IconSource::None,
@@ -274,6 +346,9 @@ impl RawFormula {
             raw_json,
             exists_in_applications: false,
             is_mas: false,
+            // Feature #4 — filled lazily in `brew_info` (the parser stays
+            // pure / I/O-free); never sized here.
+            installed_size_bytes: None,
         }
     }
 }
@@ -302,14 +377,15 @@ impl RawCask {
         // GitHub-resolvable URL as a canonical homepage. See
         // `Package::github_homepage`. Casks with GitHub-Releases
         // artifacts but marketing-page homepages are common.
-        let github_homepage = crate::github::resolve_github_homepage([
-            self.homepage.as_deref(),
-            self.url.as_deref(),
-        ]);
+        let github_homepage =
+            crate::github::resolve_github_homepage([self.homepage.as_deref(), self.url.as_deref()]);
 
         Package {
             name: self.token.clone(),
-            full_name: self.full_token.clone().unwrap_or_else(|| self.token.clone()),
+            full_name: self
+                .full_token
+                .clone()
+                .unwrap_or_else(|| self.token.clone()),
             kind: PackageKind::Cask,
             installed_version: self.installed.clone(),
             stable_version: self.version.clone(),
@@ -322,6 +398,20 @@ impl RawCask {
             // Casks don't track on-request vs dependency.
             installed_on_request: self.installed.is_some(),
             installed_as_dependency: false,
+            deprecated: self.deprecated,
+            disabled: self.disabled,
+            deprecation_date: self.deprecation_date.clone(),
+            deprecation_reason: self.deprecation_reason.clone(),
+            disable_date: self.disable_date.clone(),
+            disable_reason: self.disable_reason.clone(),
+            deprecation_replacement: collapse_replacement(
+                &self.deprecation_replacement_formula,
+                &self.deprecation_replacement_cask,
+            ),
+            disable_replacement: collapse_replacement(
+                &self.disable_replacement_formula,
+                &self.disable_replacement_cask,
+            ),
             icon_source,
             github_homepage,
         }
@@ -416,6 +506,9 @@ impl RawCask {
             raw_json,
             exists_in_applications,
             is_mas,
+            // Feature #4 — filled lazily in `brew_info` (the parser stays
+            // pure / I/O-free); never sized here.
+            installed_size_bytes: None,
         }
     }
 }
@@ -520,7 +613,11 @@ fn check_app_is_mas_macos(filename: &str) -> bool {
         candidates.push(home.join("Applications").join(filename));
     }
     candidates.into_iter().any(|p| {
-        p.is_dir() && p.join("Contents").join("_MASReceipt").join("receipt").exists()
+        p.is_dir()
+            && p.join("Contents")
+                .join("_MASReceipt")
+                .join("receipt")
+                .exists()
     })
 }
 
@@ -568,10 +665,17 @@ mod tests {
     #[test]
     fn raw_formula_parses_brew_info_wget_fixture() {
         let raw = load_fixture("brew_info_wget.json");
-        let parsed: RawInfoV2 = serde_json::from_str(&raw)
-            .expect("brew info wget fixture must parse into RawInfoV2");
-        assert_eq!(parsed.formulae.len(), 1, "wget fixture should yield one formula");
-        assert!(parsed.casks.is_empty(), "wget fixture casks should be empty");
+        let parsed: RawInfoV2 =
+            serde_json::from_str(&raw).expect("brew info wget fixture must parse into RawInfoV2");
+        assert_eq!(
+            parsed.formulae.len(),
+            1,
+            "wget fixture should yield one formula"
+        );
+        assert!(
+            parsed.casks.is_empty(),
+            "wget fixture casks should be empty"
+        );
 
         let pkg = parsed.formulae[0].to_package();
         assert_eq!(pkg.name, "wget");
@@ -625,7 +729,10 @@ mod tests {
         let pkg = parsed.formulae[0].to_package();
         assert_eq!(pkg.kind, PackageKind::Formula);
         assert!(!pkg.name.is_empty(), "name should not be empty");
-        assert!(!pkg.full_name.is_empty(), "full_name should fall back to name");
+        assert!(
+            !pkg.full_name.is_empty(),
+            "full_name should fall back to name"
+        );
     }
 
     /// Phase 13b/12g — `github_homepage` resolution.
@@ -738,8 +845,15 @@ mod tests {
         let raw = load_fixture("brew_info_firefox.json");
         let parsed: RawInfoV2 = serde_json::from_str(&raw)
             .expect("brew info firefox fixture must parse into RawInfoV2");
-        assert!(parsed.formulae.is_empty(), "firefox fixture formulae should be empty");
-        assert_eq!(parsed.casks.len(), 1, "firefox fixture should yield one cask");
+        assert!(
+            parsed.formulae.is_empty(),
+            "firefox fixture formulae should be empty"
+        );
+        assert_eq!(
+            parsed.casks.len(),
+            1,
+            "firefox fixture should yield one cask"
+        );
 
         let pkg = parsed.casks[0].to_package();
         assert_eq!(pkg.name, "firefox");
@@ -747,7 +861,10 @@ mod tests {
         assert_eq!(pkg.kind, PackageKind::Cask);
         assert_eq!(pkg.description.as_deref(), Some("Web browser"));
         assert_eq!(pkg.tap.as_deref(), Some("homebrew/cask"));
-        assert!(pkg.stable_version.is_some(), "cask should have a stable_version");
+        assert!(
+            pkg.stable_version.is_some(),
+            "cask should have a stable_version"
+        );
         // Cask info from formulae.brew.sh has no license field — we tolerate it.
         assert_eq!(pkg.license, None);
     }
@@ -822,6 +939,91 @@ mod tests {
         assert!(pkg.github_homepage.is_none());
     }
 
+    // ---------- Feature #2: deprecation / disabled ----------
+
+    #[test]
+    fn formula_deprecated_with_reason_and_replacement_maps_onto_package() {
+        // Deprecated formula carrying a reason + a replacement_formula →
+        // Package gets deprecated=true, the reason, and the collapsed
+        // replacement token.
+        let raw_json = serde_json::json!({
+            "formulae": [{
+                "name": "oldtool",
+                "deprecated": true,
+                "deprecation_date": "2024-01",
+                "deprecation_reason": "unmaintained",
+                "deprecation_replacement_formula": "newtool",
+                "deprecation_replacement_cask": null
+            }],
+            "casks": []
+        });
+        let parsed: RawInfoV2 = serde_json::from_value(raw_json).expect("parse");
+        let pkg = parsed.formulae[0].to_package();
+        assert!(pkg.deprecated);
+        assert!(!pkg.disabled);
+        assert_eq!(pkg.deprecation_date.as_deref(), Some("2024-01"));
+        assert_eq!(pkg.deprecation_reason.as_deref(), Some("unmaintained"));
+        assert_eq!(pkg.deprecation_replacement.as_deref(), Some("newtool"));
+        assert!(pkg.disable_replacement.is_none());
+    }
+
+    #[test]
+    fn cask_disabled_with_replacement_cask_maps_onto_package() {
+        // Disabled cask whose replacement is a cask token → Package
+        // disabled=true and disable_replacement holds the cask token
+        // (formula replacement is null so the cask one wins the collapse).
+        let raw_json = serde_json::json!({
+            "formulae": [],
+            "casks": [{
+                "token": "old-app",
+                "disabled": true,
+                "disable_date": "2025-06",
+                "disable_reason": "removed",
+                "disable_replacement_formula": null,
+                "disable_replacement_cask": "new-app",
+                "version": "1.0"
+            }]
+        });
+        let parsed: RawInfoV2 = serde_json::from_value(raw_json).expect("parse");
+        let pkg = parsed.casks[0].to_package();
+        assert!(pkg.disabled);
+        assert_eq!(pkg.disable_replacement.as_deref(), Some("new-app"));
+        assert!(pkg.deprecation_replacement.is_none());
+    }
+
+    #[test]
+    fn wget_fixture_has_no_deprecation_false_positives() {
+        // The real wget fixture has all deprecation fields false/null —
+        // the Package must not pick up a phantom badge or replacement.
+        let raw = load_fixture("brew_info_wget.json");
+        let parsed: RawInfoV2 = serde_json::from_str(&raw).expect("parse");
+        let pkg = parsed.formulae[0].to_package();
+        assert!(!pkg.deprecated);
+        assert!(!pkg.disabled);
+        assert!(pkg.deprecation_date.is_none());
+        assert!(pkg.deprecation_reason.is_none());
+        assert!(pkg.disable_date.is_none());
+        assert!(pkg.disable_reason.is_none());
+        assert!(pkg.deprecation_replacement.is_none());
+        assert!(pkg.disable_replacement.is_none());
+    }
+
+    #[test]
+    fn collapse_replacement_prefers_formula_then_cask_then_none() {
+        // Formula wins when both present.
+        assert_eq!(
+            collapse_replacement(&Some("f".into()), &Some("c".into())).as_deref(),
+            Some("f")
+        );
+        // Cask fills in when formula is null.
+        assert_eq!(
+            collapse_replacement(&None, &Some("c".into())).as_deref(),
+            Some("c")
+        );
+        // Both null → None (no fabricated token).
+        assert!(collapse_replacement(&None, &None).is_none());
+    }
+
     // ---------- RawOutdatedEntry → OutdatedPackage ----------
 
     #[test]
@@ -829,7 +1031,10 @@ mod tests {
         let raw = load_fixture("brew_outdated.json");
         let parsed: RawOutdatedV2 =
             serde_json::from_str(&raw).expect("brew_outdated fixture must parse");
-        assert!(!parsed.formulae.is_empty(), "should have at least one outdated formula");
+        assert!(
+            !parsed.formulae.is_empty(),
+            "should have at least one outdated formula"
+        );
 
         let first = &parsed.formulae[0];
         let dto = first.to_dto(PackageKind::Formula);
@@ -911,10 +1116,7 @@ mod tests {
 
     use crate::types::IconSource;
 
-    fn cask_with(
-        installed: Option<&str>,
-        homepage: Option<&str>,
-    ) -> RawCask {
+    fn cask_with(installed: Option<&str>, homepage: Option<&str>) -> RawCask {
         RawCask {
             token: "demo".into(),
             full_token: None,
@@ -927,6 +1129,16 @@ mod tests {
             installed: installed.map(|s| s.to_string()),
             pinned: false,
             outdated: false,
+            deprecated: false,
+            deprecation_date: None,
+            deprecation_reason: None,
+            deprecation_replacement_formula: None,
+            deprecation_replacement_cask: None,
+            disabled: false,
+            disable_date: None,
+            disable_reason: None,
+            disable_replacement_formula: None,
+            disable_replacement_cask: None,
             caveats: None,
             conflicts_with: None,
             depends_on: None,
@@ -1019,6 +1231,16 @@ mod tests {
             options: vec![],
             pinned: false,
             outdated: false,
+            deprecated: false,
+            deprecation_date: None,
+            deprecation_reason: None,
+            deprecation_replacement_formula: None,
+            deprecation_replacement_cask: None,
+            disabled: false,
+            disable_date: None,
+            disable_reason: None,
+            disable_replacement_formula: None,
+            disable_replacement_cask: None,
             analytics: None,
         };
         assert!(matches!(raw.to_package().icon_source, IconSource::None));
@@ -1040,23 +1262,48 @@ mod tests {
             installed: None,
             pinned: false,
             outdated: false,
+            deprecated: false,
+            deprecation_date: None,
+            deprecation_reason: None,
+            deprecation_replacement_formula: None,
+            deprecation_replacement_cask: None,
+            disabled: false,
+            disable_date: None,
+            disable_reason: None,
+            disable_replacement_formula: None,
+            disable_replacement_cask: None,
             caveats: None,
             conflicts_with: None,
             depends_on: None,
             artifacts: None,
         };
         let detail = raw.to_detail(serde_json::Value::Null);
-        assert!(!detail.exists_in_applications, "bogus cask must not resolve to an app bundle");
-        assert!(!detail.is_mas, "bogus cask must not be flagged as a Mac App Store app");
+        assert!(
+            !detail.exists_in_applications,
+            "bogus cask must not resolve to an app bundle"
+        );
+        assert!(
+            !detail.is_mas,
+            "bogus cask must not be flagged as a Mac App Store app"
+        );
     }
 
     #[test]
     fn check_app_exists_rejects_unsafe_or_missing_names() {
         // Path-traversal, separators, and non-.app inputs are rejected before
         // any filesystem access — deterministic on every platform.
-        assert!(!check_app_exists_macos("../Evil.app"), "path traversal must be rejected");
-        assert!(!check_app_exists_macos("sub/dir/App.app"), "separators must be rejected");
-        assert!(!check_app_exists_macos("NotAnApp"), "missing .app suffix must be rejected");
+        assert!(
+            !check_app_exists_macos("../Evil.app"),
+            "path traversal must be rejected"
+        );
+        assert!(
+            !check_app_exists_macos("sub/dir/App.app"),
+            "separators must be rejected"
+        );
+        assert!(
+            !check_app_exists_macos("NotAnApp"),
+            "missing .app suffix must be rejected"
+        );
         assert!(!check_app_exists_macos(""), "empty name must be rejected");
         // Well-formed but guaranteed-absent bundle name → no false hit.
         assert!(!check_app_exists_macos("ZzBrewBrowserNonexistent12345.app"));
@@ -1078,7 +1325,10 @@ mod tests {
         let out = cask_app_filenames(&Some(artifacts));
         assert!(out.contains(&"Plain.app".to_string()));
         assert!(out.contains(&"Renamed.app".to_string()));
-        assert!(out.contains(&"FromSource.app".to_string()), "source path must reduce to its basename");
+        assert!(
+            out.contains(&"FromSource.app".to_string()),
+            "source path must reduce to its basename"
+        );
         assert_eq!(out.len(), 3, "non-app stanzas must be ignored");
     }
 }

@@ -49,7 +49,6 @@ pub struct BrewEnvironment {
     pub path_used: Option<String>,
 }
 
-
 // ---------- Package list ----------
 
 /// Where the frontend should source an icon for a given package row.
@@ -100,6 +99,26 @@ pub struct Package {
     pub pinned: bool,
     pub installed_on_request: bool,
     pub installed_as_dependency: bool,
+    /// Feature #2 — deprecation / disabled status. The offline baseline
+    /// (`deprecated`/`disabled` + reason/date) comes from the bundled
+    /// catalog for every package; `brew info` enriches the same fields
+    /// AND adds the replacement token (the catalog has no replacement).
+    /// `disabled` is the stronger state — when both are true the UI shows
+    /// the disabled badge.
+    pub deprecated: bool,
+    pub disabled: bool,
+    pub deprecation_date: Option<String>,
+    pub deprecation_reason: Option<String>,
+    pub disable_date: Option<String>,
+    pub disable_reason: Option<String>,
+    /// "Use X instead" token for a deprecated package. Collapsed at parse
+    /// time from `deprecation_replacement_formula` / `_cask` (formula
+    /// preferred when both are non-null). Only `brew info` carries this —
+    /// always `None` on catalog-sourced packages.
+    pub deprecation_replacement: Option<String>,
+    /// "Use X instead" token for a disabled package. Collapsed from
+    /// `disable_replacement_formula` / `_cask`. `brew info` only.
+    pub disable_replacement: Option<String>,
     /// Hint to the frontend's icon layer about which command (if any)
     /// should be used to fetch a real icon for this row. See
     /// [`IconSource`] for the variants. Only meaningful for casks;
@@ -158,6 +177,13 @@ pub struct PackageDetail {
     pub raw_json: serde_json::Value,
     pub exists_in_applications: bool,
     pub is_mas: bool,
+    /// Feature #4 — total on-disk size of the installed keg in bytes
+    /// (`du -sk` on `<prefix>/Cellar/<name>` for formulae,
+    /// `<prefix>/Caskroom/<token>` for casks, summing all installed
+    /// versions). `None` when the package isn't installed, the keg dir is
+    /// absent (e.g. a cask on Linux), or `du` couldn't measure it. Filled
+    /// lazily inside `brew_info` — the static parsers leave it `None`.
+    pub installed_size_bytes: Option<u64>,
 }
 
 // ---------- Outdated ----------
@@ -241,6 +267,8 @@ pub enum BrewStreamEvent {
         exit_code: i32,
         success: bool,
         duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        friendly_message: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     Canceled { job_id: Uuid },
@@ -560,6 +588,14 @@ mod tests {
             pinned: false,
             installed_on_request: true,
             installed_as_dependency: false,
+            deprecated: false,
+            disabled: false,
+            deprecation_date: None,
+            deprecation_reason: None,
+            disable_date: None,
+            disable_reason: None,
+            deprecation_replacement: None,
+            disable_replacement: None,
             icon_source: IconSource::None,
             github_homepage: None,
         };
@@ -578,6 +614,14 @@ mod tests {
             "pinned",
             "installedOnRequest",
             "installedAsDependency",
+            "deprecated",
+            "disabled",
+            "deprecationDate",
+            "deprecationReason",
+            "disableDate",
+            "disableReason",
+            "deprecationReplacement",
+            "disableReplacement",
             "iconSource",
             "githubHomepage",
         ] {
@@ -593,7 +637,11 @@ mod tests {
             "icon_source",
             "github_homepage",
         ] {
-            assert!(v.get(snake).is_none(), "snake key {:?} must not be present", snake);
+            assert!(
+                v.get(snake).is_none(),
+                "snake key {:?} must not be present",
+                snake
+            );
         }
     }
 
@@ -642,6 +690,7 @@ mod tests {
             exit_code: 0,
             success: true,
             duration_ms: 123,
+            friendly_message: None,
         };
         let v = serde_json::to_value(&evt).unwrap();
         // Tag discriminator.
@@ -651,6 +700,7 @@ mod tests {
         assert_eq!(v["exitCode"], 0);
         assert_eq!(v["success"], true);
         assert_eq!(v["durationMs"], 123);
+        assert!(v.get("friendlyMessage").is_none());
     }
 
     #[test]

@@ -12,6 +12,13 @@ struct InstalledPackage: Identifiable, Hashable, Sendable {
     let name: String
     let version: String
     let kind: Kind
+    /// Whether brew records this package as installed *on request* (the user ran
+    /// `brew install foo`), vs pulled in only as a dependency. Tagged at load
+    /// time from the `brew list --installed-on-request --formula` set (formulae)
+    /// + the cask rule (all installed casks count as on-request). Drives the
+    /// Manual vs Dependency Library filters. Defaults to `false` so the
+    /// `list --versions` constructors stay valid before tagging. Feature #3.
+    var installedOnRequest: Bool = false
 
     enum Kind: String, Sendable { case formula, cask }
 }
@@ -318,11 +325,43 @@ struct BrewService: Sendable {
     }
 
     /// All installed packages — formulae + casks — merged and name-sorted.
+    /// Mirrors Tauri's `brew_list`: `brew info --installed --json=v2`.
+    /// This survives Homebrew 6's untrusted-cask-tap guard better than
+    /// `brew list --cask --versions`, and carries formula `installed_on_request`
+    /// so the Manual/Dependency filters do not need a second brew call.
     func listInstalledAll() async throws -> [InstalledPackage] {
-        async let formulae = listInstalledFormulae()
-        async let casks = listInstalledCasks()
-        let merged = try await formulae + casks
-        return merged.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let raw = try await runCapture(["info", "--installed", "--json=v2"])
+        return try Self.parseInstalledInfoV2(raw)
+    }
+
+    static func parseInstalledInfoV2(_ raw: String) throws -> [InstalledPackage] {
+        let data = Data(raw.utf8)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw BrewError.nonZeroExit(code: -1, stderr: "Unparseable brew info --installed JSON")
+        }
+
+        let formulae = (root["formulae"] as? [[String: Any]] ?? []).compactMap { o -> InstalledPackage? in
+            guard let name = o["name"] as? String else { return nil }
+            let installed = o["installed"] as? [[String: Any]]
+            let first = installed?.first
+            let version = first?["version"] as? String
+                ?? ((o["versions"] as? [String: Any])?["stable"] as? String)
+                ?? "—"
+            let onRequest = first?["installed_on_request"] as? Bool ?? false
+            return InstalledPackage(name: name, version: version, kind: .formula, installedOnRequest: onRequest)
+        }
+
+        let casks = (root["casks"] as? [[String: Any]] ?? []).compactMap { o -> InstalledPackage? in
+            guard let token = o["token"] as? String else { return nil }
+            let installed = o["installed"] as? String
+            let version = installed
+                ?? o["version"] as? String
+                ?? "—"
+            return InstalledPackage(name: token, version: version, kind: .cask, installedOnRequest: true)
+        }
+
+        return (formulae + casks)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// Count of newline-delimited entries from a brew subcommand, ignoring
@@ -343,6 +382,39 @@ struct BrewService: Sendable {
     /// in as dependencies. Mirrors the Tauri "N on request" chip.
     func countOnRequest() async throws -> Int {
         try await lineCount(["list", "--installed-on-request", "--formula"])
+    }
+
+    /// Set of formula names the user explicitly requested, from
+    /// `brew list --installed-on-request --formula`. Parallel to `countOnRequest`
+    /// (same brew call), but returns the names so `loadLibrary` can tag each
+    /// `InstalledPackage.installedOnRequest`. Drives the Manual/Dependency Library
+    /// filters. Feature #3.
+    func listOnRequestFormulae() async throws -> Set<String> {
+        let raw = try await runCapture(["list", "--installed-on-request", "--formula"])
+        return BrewService.parseNameSet(raw)
+    }
+
+    /// Parse newline-delimited brew output into a name `Set`, skipping blank
+    /// lines — same line handling as `lineCount`. Static + pure so it can be
+    /// unit-tested without shelling out (mirrors the Rust parse tests).
+    static func parseNameSet(_ raw: String) -> Set<String> {
+        Set(raw.split(separator: "\n").map { String($0) }.filter { !$0.isEmpty })
+    }
+
+    /// Tag each installed package with `installedOnRequest`, given the on-request
+    /// formula name set from `listOnRequestFormulae`. Casks are always treated as
+    /// on-request (matching Tauri parse.rs:393-394, which sets on_request=true for
+    /// every installed cask); formulae are on-request only if present in the set.
+    /// Static + pure for unit testing. Feature #3.
+    static func taggingOnRequest(
+        _ packages: [InstalledPackage],
+        onRequest: Set<String>
+    ) -> [InstalledPackage] {
+        packages.map { pkg in
+            var p = pkg
+            p.installedOnRequest = pkg.kind == .cask || onRequest.contains(pkg.name)
+            return p
+        }
     }
 
     /// Pinned formulae (held back from upgrade). Mirrors the "N pinned" chip.
@@ -504,6 +576,17 @@ struct PackageInfo: Sendable, Hashable {
     let dependencies: [String]
     let buildDependencies: [String]
     let conflictsWith: [String]
+    /// Deprecation/disabled status from `brew info --json=v2` — the RICHER source
+    /// that also carries the replacement token ("use X instead"), which the
+    /// bundled catalog never has. Drives the detail panel's deprecation notice.
+    /// Mirrors the Tauri `Package` deprecation fields. Default clean.
+    var deprecation: DeprecationStatus = DeprecationStatus()
+    /// On-disk size of the installed keg in bytes, from `du -sk` on
+    /// `<prefix>/Cellar/<name>` (formula, all versions) or
+    /// `<prefix>/Caskroom/<token>` (cask). nil when the package isn't installed
+    /// or du fails — never fabricated. Computed lazily in `info()`, not by the
+    /// static parsers. Mirrors the Tauri `installed_size_bytes` field (feature #4).
+    var installedSizeBytes: Int64? = nil
 
     var isOutdated: Bool {
         guard let i = installedVersion, let s = stableVersion else { return outdated }
@@ -527,14 +610,37 @@ extension BrewService {
             throw BrewError.nonZeroExit(code: -1, stderr: "No \(arrayKey) entry for \(name)")
         }
 
-        if kind == .cask {
-            return Self.parseCask(obj)
-        } else {
-            return Self.parseFormula(obj)
+        var parsed = kind == .cask ? Self.parseCask(obj) : Self.parseFormula(obj)
+
+        // Lazily size the installed keg (feature #4). Only when the package is
+        // actually installed — a non-installed package gets nil (no du, no
+        // fabricated estimate). Reuses `dirSizeBytes` (the `du -sk` helper) on
+        // the resolved keg dir. Formula: Cellar/<short-name> (all versions);
+        // cask: Caskroom/<token>. Short name (not full tap path) per layout.
+        if parsed.installedVersion != nil {
+            let prefix = await prefix()
+            let kegPath = Self.kegPath(prefix: prefix, name: parsed.name, kind: kind)
+            parsed.installedSizeBytes = await dirSizeBytes(kegPath)
         }
+        return parsed
     }
 
-    private static func parseFormula(_ o: [String: Any]) -> PackageInfo {
+    /// Resolve the on-disk keg directory for a package. Formula kegs live at
+    /// `<prefix>/Cellar/<short-name>` (a dir of per-version subdirs — sizing the
+    /// parent sums all installed versions); cask kegs at
+    /// `<prefix>/Caskroom/<token>`. Always uses the short name (the last path
+    /// component) so tap-qualified names like `homebrew/core/wget` map to
+    /// `Cellar/wget`, not the full tap path. Mirrors the Tauri keg-path logic.
+    static func kegPath(prefix: String, name: String, kind: InstalledPackage.Kind) -> String {
+        let short = name.split(separator: "/").last.map(String.init) ?? name
+        let sub = kind == .cask ? "Caskroom" : "Cellar"
+        return "\(prefix)/\(sub)/\(short)"
+    }
+
+    // Internal (not private) so `BrewOutputParsingTests` can feed these the same
+    // decoded `brew info --json=v2` dicts the live `info(name:kind:)` path parses
+    // — keeping the deprecation mapping in lock-step with the Rust `to_package`.
+    static func parseFormula(_ o: [String: Any]) -> PackageInfo {
         let name = o["name"] as? String ?? o["full_name"] as? String ?? "?"
         let versions = o["versions"] as? [String: Any]
         let stable = versions?["stable"] as? String
@@ -565,11 +671,12 @@ extension BrewService {
             pinned: o["pinned"] as? Bool ?? false,
             dependencies: o["dependencies"] as? [String] ?? [],
             buildDependencies: o["build_dependencies"] as? [String] ?? [],
-            conflictsWith: o["conflicts_with"] as? [String] ?? []
+            conflictsWith: o["conflicts_with"] as? [String] ?? [],
+            deprecation: parseDeprecationStatus(o, includeReplacement: true)
         )
     }
 
-    private static func parseCask(_ o: [String: Any]) -> PackageInfo {
+    static func parseCask(_ o: [String: Any]) -> PackageInfo {
         // Casks: token, version (string), installed (string), name [array], desc.
         let token = o["token"] as? String ?? o["full_token"] as? String ?? "?"
         let nameArr = o["name"] as? [String]
@@ -595,7 +702,8 @@ extension BrewService {
             pinned: false,
             dependencies: [],
             buildDependencies: [],
-            conflictsWith: []
+            conflictsWith: [],
+            deprecation: parseDeprecationStatus(o, includeReplacement: true)
         )
     }
 

@@ -22,18 +22,10 @@ pub async fn brew_info(
             "--formula",
             format!("brew info --json=v2 --formula {}", name),
         ),
-        PackageKind::Cask => (
-            "--cask",
-            format!("brew info --json=v2 --cask {}", name),
-        ),
+        PackageKind::Cask => ("--cask", format!("brew info --json=v2 --cask {}", name)),
     };
 
-    let raw = run_brew_capture(
-        &path,
-        &["info", "--json=v2", kind_flag, &name],
-        &display,
-    )
-    .await?;
+    let raw = run_brew_capture(&path, &["info", "--json=v2", kind_flag, &name], &display).await?;
 
     let parsed: RawInfoV2 = serde_json::from_str(&raw).map_err(|e| BrewError::JsonParse {
         command: display.clone(),
@@ -42,32 +34,79 @@ pub async fn brew_info(
     })?;
 
     // Capture the raw JSON for the "raw" tab in the detail panel.
-    let raw_value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        BrewError::JsonParse {
+    let raw_value: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| BrewError::JsonParse {
             command: display.clone(),
             message: e.to_string(),
             raw_excerpt: truncate_head(&raw, 2048),
-        }
-    })?;
+        })?;
 
-    match kind {
+    let mut detail = match kind {
         PackageKind::Formula => {
-            let f = parsed.formulae.into_iter().next().ok_or_else(|| {
-                BrewError::Internal {
+            let f = parsed
+                .formulae
+                .into_iter()
+                .next()
+                .ok_or_else(|| BrewError::Internal {
                     message: format!("brew returned no formula entry for {}", name),
-                }
-            })?;
-            Ok(f.to_detail(raw_value))
+                })?;
+            f.to_detail(raw_value)
         }
         PackageKind::Cask => {
-            let c = parsed.casks.into_iter().next().ok_or_else(|| {
-                BrewError::Internal {
+            let c = parsed
+                .casks
+                .into_iter()
+                .next()
+                .ok_or_else(|| BrewError::Internal {
                     message: format!("brew returned no cask entry for {}", name),
-                }
-            })?;
-            Ok(c.to_detail(raw_value))
+                })?;
+            c.to_detail(raw_value)
         }
-    }
+    };
+
+    // Feature #4 — lazily size the installed keg (one `du -sk` on the
+    // resolved keg dir). Only when the package is actually installed; an
+    // uninstalled package skips `du` entirely and keeps `None`. Uses the
+    // short `package.name` (Cellar/Caskroom dirs key on the short name,
+    // never the tap-qualified full_name) and sums all installed versions.
+    detail.installed_size_bytes = compute_installed_size(&path, &detail, &state).await;
+
+    Ok(detail)
+}
+
+/// Resolve the Homebrew prefix (cached `brew_env.prefix` when present,
+/// else a `brew --prefix` shell-out) and size the package's keg via the
+/// shared `du -sk` helper. Returns `None` when the package isn't installed,
+/// the prefix can't be resolved, the keg dir is absent (e.g. a cask on
+/// Linux), or `du` errored — never a fabricated value.
+async fn compute_installed_size(
+    brew: &std::path::Path,
+    detail: &PackageDetail,
+    state: &State<'_, AppState>,
+) -> Option<u64> {
+    // Cheap bail-out before touching the filesystem: not installed → no size.
+    let installed_version = detail.package.installed_version.as_deref()?;
+
+    // Prefer the cached prefix; fall back to `brew --prefix`.
+    let prefix = {
+        let cached = state.brew_env.read().await.prefix.clone();
+        match cached.filter(|s| !s.is_empty()) {
+            Some(p) => p,
+            None => run_brew_capture(brew, &["--prefix"], "brew --prefix")
+                .await
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())?,
+        }
+    };
+
+    crate::commands::disk_usage::installed_size_bytes(
+        std::path::Path::new(&prefix),
+        &detail.package.name,
+        detail.package.kind,
+        Some(installed_version),
+    )
+    .await
 }
 
 /// Stricter validator for cask tokens that reach the filesystem.
@@ -229,12 +268,7 @@ mod tests {
 
     #[test]
     fn rejects_leading_dash_injection() {
-        for s in &[
-            "-rm",
-            "--force",
-            "-version",
-            "-",
-        ] {
+        for s in &["-rm", "--force", "-version", "-"] {
             let msg = err_message(validate_package_name(s));
             assert!(
                 msg.contains("may not start with '-'"),
@@ -257,7 +291,7 @@ mod tests {
             "foo|bar",
             "$(whoami)",
             "`whoami`",
-            "foo bar",   // space
+            "foo bar", // space
             "foo>out",
             "foo<in",
             "foo*",
@@ -284,10 +318,10 @@ mod tests {
         // potential downstream concern — `brew` itself would reject them.
         // The empty-segment, control-char forms ARE rejected:
         for s in &[
-            "../etc/passwd\0",   // null byte
-            "foo\nbar",          // newline
-            "foo\rbar",          // CR
-            "foo\tbar",          // tab
+            "../etc/passwd\0", // null byte
+            "foo\nbar",        // newline
+            "foo\rbar",        // CR
+            "foo\tbar",        // tab
         ] {
             let r = validate_package_name(s);
             assert!(

@@ -74,6 +74,25 @@ export interface Package {
   pinned: boolean;
   installedOnRequest: boolean;
   installedAsDependency: boolean;
+  /**
+   * Feature #2 — deprecation / disabled status. The flags + reason/date
+   * are the offline baseline (also on the bundled catalog, via
+   * {@link CatalogEntrySummary}); `brew info` additionally fills the
+   * replacement tokens below. `disabled` is the stronger state — when
+   * both are true the UI shows the disabled (danger) badge.
+   */
+  deprecated: boolean;
+  disabled: boolean;
+  deprecationDate: string | null;
+  deprecationReason: string | null;
+  disableDate: string | null;
+  disableReason: string | null;
+  /** "Use X instead" token for a deprecated package. Collapsed from
+   *  the upstream formula/cask replacement variants (formula preferred).
+   *  Only `brew info` carries this — always null on catalog-sourced rows. */
+  deprecationReplacement: string | null;
+  /** "Use X instead" token for a disabled package. `brew info` only. */
+  disableReplacement: string | null;
   iconSource: IconSource;
   /**
    * Canonical `https://github.com/<owner>/<repo>` URL when ANY of the
@@ -122,6 +141,16 @@ export interface PackageDetail {
   rawJson: unknown;
   existsInApplications: boolean;
   isMas: boolean;
+  /**
+   * Feature #4 — total on-disk size of the installed keg in bytes
+   * (`du -sk` on `<prefix>/Cellar/<name>` for formulae,
+   * `<prefix>/Caskroom/<token>` for casks, summing all installed
+   * versions). Null when the package isn't installed, the keg dir is
+   * absent (e.g. a cask on Linux), or `du` couldn't measure it.
+   * Computed lazily inside `brew_info` (travels on this DTO — no second
+   * IPC round-trip). Null → the detail "Size" row is not rendered.
+   */
+  installedSizeBytes: number | null;
 }
 
 // =========================================================
@@ -164,7 +193,7 @@ export type BrewStreamEvent =
   | { kind: "stdout";   jobId: string; line: string; ts: string }
   | { kind: "stderr";   jobId: string; line: string; ts: string }
   | { kind: "progress"; jobId: string; phase: string; package: string; current: number; total: number | null }
-  | { kind: "exit";     jobId: string; exitCode: number; success: boolean; durationMs: number }
+  | { kind: "exit";     jobId: string; exitCode: number; success: boolean; durationMs: number; friendlyMessage?: string }
   | { kind: "canceled"; jobId: string }
   | { kind: "error";    jobId: string; error: BrewErrorPayload };
 
@@ -266,6 +295,43 @@ export interface CatalogEntrySummary {
   version: string | null;
   deprecated: boolean;
   disabled: boolean;
+  /** Feature #2 — catalog deprecation/disable reason (offline baseline).
+   *  Powers a status tooltip on list/Discover rows without a per-token
+   *  `brew info` lookup. The catalog never carries a replacement token —
+   *  that's `brew info`-only (see {@link Package.deprecationReplacement}). */
+  deprecationReason: string | null;
+  disableReason: string | null;
+}
+
+/**
+ * One reverse-dependent of a queried package — a catalog entry that
+ * declares the queried token in one of its dependency arrays (or, for a
+ * cask, in `depends_on.formula`). Returned inside {@link ReverseDependents}
+ * by `catalog_reverse_dependents`. Wire shape mirrors the Rust
+ * `ReverseDependent` struct (camelCase).
+ */
+export interface ReverseDependent {
+  /** Name (formula) or token (cask) of the dependent. */
+  name: string;
+  /** Whether the dependent is a formula or a cask. Cask dependents only
+   *  ever appear on macOS — the backend folds them in under
+   *  `cfg!(target_os = "macos")`. */
+  kind: "formula" | "cask";
+  /** How the dependent declares the edge. Cask edges are always
+   *  "required". */
+  edge: "required" | "build" | "recommended" | "optional";
+}
+
+/**
+ * Reverse-dependents payload for one queried token. Returned by
+ * `catalog_reverse_dependents`. `dependents` is deduped by (name, kind)
+ * keeping the strongest edge, sorted ascending by name; empty when
+ * nothing in the catalog depends on the queried token.
+ */
+export interface ReverseDependents {
+  /** The queried token, echoed back. */
+  name: string;
+  dependents: ReverseDependent[];
 }
 
 /**
@@ -963,6 +1029,8 @@ export interface ActivityJob {
   lines: ActivityLine[];
   exitCode?: number;
   durationMs?: number;
+  /** Backend-generated friendly message for known environmental/upstream failures. */
+  friendlyMessage?: string;
   /** Best-effort live progress from brew's `==>` markers (running jobs). */
   progress?: JobProgress;
 }
@@ -978,6 +1046,30 @@ export interface ActivityLine {
   stream: "stdout" | "stderr";
   text: string;
   ts: string;
+}
+
+/** Classification of an activity job into a package-change kind.
+ *  `other` = not a per-package change (tap update / Brewfile bundle) and is
+ *  excluded from the "Recent changes" feed. Mirrors the native (Swift) enum. */
+export type ChangeKind = "installed" | "upgraded" | "uninstalled" | "other";
+
+/** A single derived "recent change" — a pure projection of an {@link ActivityJob},
+ *  NOT a separately-persisted record. Carries the action kind, affected package
+ *  (null for bulk upgrades), an optional bulk `count`, a normalized timestamp
+ *  (epoch ms — Tauri from ISO `startedAt`, native from epoch-seconds), and the
+ *  terminal status. Deliberately carries NO version delta: the activity log
+ *  records no structured old→new version, so neither shell fabricates one. */
+export interface RecentChange {
+  jobId: string;
+  kind: Exclude<ChangeKind, "other">;
+  /** Affected package name, or null for a bulk upgrade (no per-package names). */
+  package: string | null;
+  /** Number of packages for a bulk upgrade ("Upgrading N packages"); null for
+   *  single-package changes and for "Upgrading all packages" (count unknown). */
+  count: number | null;
+  /** Job start time normalized to epoch milliseconds. */
+  timestamp: number;
+  status: "succeeded" | "failed" | "canceled";
 }
 
 /** Command-palette item — either a verb (action) or a package. */

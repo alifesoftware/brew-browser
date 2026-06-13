@@ -44,16 +44,17 @@
   import ShieldCheck from "@lucide/svelte/icons/shield-check";
   import ShieldAlert from "@lucide/svelte/icons/shield-alert";
   import Shield from "@lucide/svelte/icons/shield";
-  import { brewInfo, brewInstall, brewUninstall, brewUpgrade, appVersion } from "$lib/api";
+  import { brewInfo, brewInstall, brewUninstall, brewUpgrade, appVersion, catalogReverseDependents } from "$lib/api";
   import { isLinux } from "$lib/util/platform";
   import { safeOpenUrl } from "$lib/util/url";
   import { bareToken } from "$lib/util/token";
+  import { fmtBytes } from "$lib/util/format";
   import { reportableToastError } from "$lib/util/reportIssue";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import IssueModal from "./IssueModal.svelte";
   import TrendingSparkline from "./TrendingSparkline.svelte";
   import { trendingHistory } from "$lib/stores/trendingHistory.svelte";
-  import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail, type RawVuln, type Severity } from "$lib/types";
+  import { brewErrorMessage, isBrewError, normalizeServiceStatus, type EnrichmentEntry, type IconSource, type PackageDetail, type RawVuln, type ReverseDependent, type Severity } from "$lib/types";
 
   // Categories file is small; ensure it's loaded so the pills can render. Idempotent.
   categories.ensureLoaded();
@@ -82,6 +83,10 @@
 
   let depsOpen = $state(false);
   let dependentsOpen = $state(false);
+  // Feature #1 — reverse dependencies ("Required by"). Catalog-graph
+  // inversion fetched alongside the detail; collapsible like Dependencies.
+  let reqByOpen = $state(false);
+  let dependents = $state<ReverseDependent[]>([]);
   let confirmUninstall = $state(false);
   let confirmExternalInstall = $state(false);
 
@@ -124,6 +129,9 @@
     loading = true;
     error = null;
     detail = null;
+    // Reset reverse-deps for the new package; refilled below.
+    dependents = [];
+    reqByOpen = false;
     try {
       detail = await brewInfo(name, kind);
     } catch (e) {
@@ -148,6 +156,25 @@
     // or Offline Mode is on, so this is safe to call unconditionally.
     // Soft-fails — sparkline simply doesn't appear if fetch fails.
     void trendingHistory.ensureSeriesLoaded(name, kind);
+    // Feature #1 — reverse dependencies. Pure catalog-graph inversion
+    // (no subprocess, no network). Key on the bare token: the catalog
+    // graph stores bare formula tokens, while `name` may be tap-qualified
+    // (`user/tap/foo`). Soft-fails to an empty set — the section simply
+    // doesn't appear if the lookup errors. Guarded against a stale
+    // response overwriting a newer selection via the token check.
+    {
+      const reqToken = bareToken(name);
+      void catalogReverseDependents(reqToken)
+        .then((res) => {
+          // Only apply if the user is still looking at this package.
+          if (ui.selectedPackage && bareToken(ui.selectedPackage.name) === reqToken) {
+            dependents = res.dependents;
+          }
+        })
+        .catch(() => {
+          /* leaf / unknown / catalog-corrupt → no section */
+        });
+    }
     // Opt-in live enrichment: fetch fresher friendly-name/summary/etc. for the
     // package being viewed and overlay it. No-ops unless the user opted in
     // (toggle + not paranoid + AI on); soft-fails to the bundled entry.
@@ -185,8 +212,6 @@
             .then(() => vulnerabilities.maybeNotifyExposure())
             .catch(() => {});
         }
-      } else {
-        toast.error(`Install failed: ${name}`);
       }
     } catch (e) {
       reportableToastError("Install failed", e);
@@ -227,8 +252,6 @@
           vulnerabilities.invalidate(kind, name, removedVersion).catch(() => {});
         }
         ui.closeDetail();
-      } else {
-        toast.error(`Uninstall failed: ${name}`);
       }
     } catch (e) {
       reportableToastError("Uninstall failed", e);
@@ -267,8 +290,6 @@
             .then(() => vulnerabilities.maybeNotifyExposure())
             .catch(() => {});
         }
-      } else {
-        toast.error(`Upgrade failed: ${name}`);
       }
     } catch (e) {
       reportableToastError("Upgrade failed", e);
@@ -292,6 +313,54 @@
   // search on Linux, but detail can still surface one (snapshots, deep links)
   // — never offer an Install that can only fail with "macOS is required".
   let caskOnLinux = $derived(isLinux && ui.selectedPackage?.kind === "cask");
+
+  // ────────────────────────────────────────────────────────────────
+  // Feature #2 — deprecation / disabled notice.
+  //
+  // `pkg` comes from `brew info`, so it carries the richest data: flags,
+  // reason, date, AND the replacement token (the catalog has no
+  // replacement). `disabled` is the stronger state — when both are true
+  // the notice shows the disabled (danger) variant. A package with
+  // neither flag renders no notice (never a placeholder).
+  //
+  // The replacement is a clickable token routing via `ui.selectPackage`,
+  // which re-fetches `brew info` for it. We infer the replacement's kind
+  // the same way `openSimilar` does (loaded packages first, else formula
+  // — the catalog doesn't carry kind for an arbitrary token). On Linux a
+  // cask replacement still routes to detail, where the existing
+  // `caskOnLinux` gate suppresses the install action — same already-gated
+  // path, so no extra branch is needed here.
+  let deprecationNotice = $derived.by<
+    { kind: "deprecated" | "disabled"; reason: string | null; date: string | null; replacement: string | null } | null
+  >(() => {
+    if (!pkg) return null;
+    if (pkg.disabled) {
+      return {
+        kind: "disabled",
+        reason: pkg.disableReason,
+        date: pkg.disableDate,
+        replacement: pkg.disableReplacement,
+      };
+    }
+    if (pkg.deprecated) {
+      return {
+        kind: "deprecated",
+        reason: pkg.deprecationReason,
+        date: pkg.deprecationDate,
+        replacement: pkg.deprecationReplacement,
+      };
+    }
+    return null;
+  });
+
+  /** Jump to a deprecation replacement's detail. Same kind-inference as
+   *  {@link openSimilar} — the catalog doesn't carry the replacement's
+   *  kind, so prefer a loaded package, else default to formula. */
+  function openReplacement(token: string) {
+    const installed = packages.all.find((p) => p.name === token);
+    const kind = installed?.kind ?? "formula";
+    ui.selectPackage(token, kind);
+  }
 
   /** Categories assigned to this package (from `categories.json`). */
   let pkgCategories = $derived.by<string[]>(() => {
@@ -374,6 +443,35 @@
     const installed = packages.all.find((p) => p.name === token);
     const kind = installed?.kind ?? "formula";
     ui.selectPackage(token, kind);
+  }
+
+  /** Feature #1 — reverse dependents, filtered for the host platform.
+   *  Cask dependents can only install on macOS, so on Linux we drop
+   *  cask-kind rows entirely (a deep-linked formula must never offer a
+   *  cask that can only fail). Formula→formula edges show everywhere —
+   *  byte-identical to the macOS formula-graph result. */
+  let visibleDependents = $derived<ReverseDependent[]>(
+    isLinux ? dependents.filter((d) => d.kind !== "cask") : dependents,
+  );
+
+  /** Jump to a reverse-dependent's detail. The dependent's `kind` is
+   *  authoritative (it came straight from the catalog), so we pass it
+   *  directly rather than re-inferring like {@link openSimilar}. */
+  function openDependent(dep: ReverseDependent) {
+    ui.selectPackage(dep.name, dep.kind);
+  }
+
+  /** Short label for an edge type, shown after the name. "required" is
+   *  the default and stays unlabelled to keep the list quiet; the rest
+   *  are flagged so build-only / opt-in edges read honestly. */
+  function edgeLabel(dep: ReverseDependent): string | null {
+    if (dep.kind === "cask") return "cask";
+    switch (dep.edge) {
+      case "build":       return "build";
+      case "recommended": return "recommended";
+      case "optional":    return "optional";
+      case "required":    return null;
+    }
   }
 
   /**
@@ -954,6 +1052,44 @@
               {/if}
             </dd>
           </div>
+          <!-- Feature #3 — install provenance. Only meaningful for an
+               actually-installed package, and only when a per-keg brew
+               flag is set (legacy/neither-flag kegs render no row rather
+               than a fabricated default). "Dependency" wins a Pill badge
+               (mirrors the Feature #2 deprecation badge intent); explicit
+               on-request installs read plainly as "On request". The
+               Dependency case keys on installedAsDependency && NOT
+               on-request, matching the Library "Dependency" filter so a
+               both-flags-true package reads as Manual ("On request"). -->
+          {#if pkg.installedVersion && (pkg.installedOnRequest || pkg.installedAsDependency)}
+            <div>
+              <dt>Install</dt>
+              <dd>
+                {#if pkg.installedOnRequest}
+                  On request
+                {:else}
+                  <span title="Installed as a dependency of another package, not requested directly.">
+                    <Pill tone="info">dependency</Pill>
+                  </span>
+                {/if}
+              </dd>
+            </div>
+          {/if}
+          <!-- Feature #4 — on-disk keg size. Travels on the PackageDetail
+               DTO (computed lazily by `brew_info` via `du -sk`); null when
+               the package isn't installed, the keg dir is absent (e.g. a
+               cask on Linux), or `du` couldn't measure it. Null → no row
+               (no fabricated "0 B" / estimate). Kind-agnostic and
+               self-gating on the null value, so no isLinux gate is needed.
+               Shares `fmtBytes` with the Dashboard Storage card. -->
+          {#if detail.installedSizeBytes != null}
+            <div>
+              <dt>Size</dt>
+              <dd title="Total on-disk size of the installed keg (all versions).">
+                {fmtBytes(detail.installedSizeBytes)}
+              </dd>
+            </div>
+          {/if}
           <div>
             <dt>Latest</dt>
             <dd>
@@ -1048,6 +1184,48 @@
             <span class="truncate">{pkg.homepage}</span>
             <ExternalLink size={12} />
           </button>
+        {/if}
+
+        <!-- Feature #2: deprecation / disabled notice. Renders before the
+             Security card (mirrors the gh-archived notice pattern). Shows
+             the reason + date verbatim and, when brew info supplied a
+             replacement token, a clickable "use X instead" link that
+             re-fetches detail for the successor. `disabled` is the
+             stronger (danger) state; neither flag → no notice. -->
+        {#if deprecationNotice}
+          <div
+            class="deprecation-notice"
+            class:disabled={deprecationNotice.kind === "disabled"}
+            role="status"
+          >
+            <Archive size={14} aria-hidden="true" />
+            <div class="deprecation-body">
+              <p class="deprecation-line">
+                <strong>
+                  {deprecationNotice.kind === "disabled" ? "Disabled" : "Deprecated"}
+                </strong>{#if deprecationNotice.date}<span class="deprecation-date"> &middot; {deprecationNotice.date}</span>{/if}{#if deprecationNotice.reason}<span class="deprecation-reason"> — {deprecationNotice.reason}</span>{/if}
+              </p>
+              {#if deprecationNotice.kind === "disabled"}
+                <p class="deprecation-sub">No longer available via Homebrew.</p>
+              {:else}
+                <p class="deprecation-sub">May be removed in a future Homebrew update.</p>
+              {/if}
+              {#if deprecationNotice.replacement}
+                <p class="deprecation-replacement">
+                  Use
+                  <button
+                    type="button"
+                    class="deprecation-replacement-link"
+                    onclick={() => openReplacement(deprecationNotice!.replacement!)}
+                    title={`Open ${deprecationNotice.replacement}`}
+                  >
+                    {deprecationNotice.replacement}
+                  </button>
+                  instead.
+                </p>
+              {/if}
+            </div>
+          </div>
         {/if}
 
         <!-- v0.5.0: Security card. Three states branch off whether we
@@ -1492,6 +1670,48 @@
           </section>
         {/if}
 
+        <!-- Feature #1 — Reverse dependencies ("Required by"). Pure
+             catalog-graph inversion: every catalog entry that declares
+             this package as a dependency. Each row is a button that
+             navigates to that dependent's detail (same pattern as the
+             Similar-packages pills). Cask dependents are gated off Linux
+             via `visibleDependents`. Empty set → no section (honest
+             leaf-node state). Note: forward Dependencies above come from
+             `brew info` (the installed formula's actual deps) while this
+             list inverts the bundled catalog snapshot, so the two aren't
+             guaranteed to be perfectly symmetric. -->
+        {#if visibleDependents.length > 0}
+          <section class="collapse">
+            <button class="collapse-head" aria-expanded={reqByOpen} onclick={() => (reqByOpen = !reqByOpen)}>
+              {#if reqByOpen}<ChevronDown size={14} />{:else}<ChevronRight size={14} />{/if}
+              <span>Required by ({visibleDependents.length})</span>
+              <InfoButton
+                title="About reverse dependencies"
+                body="Packages in the bundled catalog that list this one as a dependency. Computed offline by inverting the catalog graph — no network or brew calls. Build-only and opt-in (recommended/optional) edges are labelled; everything else is a required runtime dependency."
+                label="About reverse dependencies"
+              />
+            </button>
+            {#if reqByOpen}
+              <ul class="deps">
+                {#each visibleDependents as dep (dep.kind + ":" + dep.name)}
+                  {@const label = edgeLabel(dep)}
+                  <li>
+                    <button
+                      type="button"
+                      class="dependent-link"
+                      onclick={() => openDependent(dep)}
+                      title={`Open ${dep.name}`}
+                    >
+                      {dep.name}
+                    </button>
+                    {#if label}<span class="dependent-edge text-muted">{label}</span>{/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </section>
+        {/if}
+
         {#if detail.conflictsWith.length > 0}
           <section class="collapse">
             <button class="collapse-head" aria-expanded={dependentsOpen} onclick={() => (dependentsOpen = !dependentsOpen)}>
@@ -1821,6 +2041,29 @@
   .deps li { min-width: 0; }
   .deps li::before { content: "·"; margin-right: var(--space-2); color: var(--color-text-muted); }
 
+  /* Feature #1 — reverse-dependent rows are clickable links that
+     navigate to the dependent's detail. Inline text-button styling so
+     they sit naturally inside the `.deps` list next to the bullet. */
+  .dependent-link {
+    color: var(--color-text-secondary);
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    transition: color 0.12s ease;
+  }
+  .dependent-link:hover { color: var(--color-text-primary); text-decoration: underline; }
+  .dependent-link:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm, 3px);
+  }
+  .dependent-edge {
+    margin-left: var(--space-2);
+    font-size: var(--text-caption);
+  }
+
   .actions {
     display: flex;
     gap: var(--space-3);
@@ -1878,6 +2121,55 @@
     border-radius: var(--radius-sm);
     color: var(--color-warning-strong);
   }
+
+  /* ── Feature #2: deprecation / disabled notice ──
+     Mirrors the .gh-archived warning card. Deprecated = warning (amber),
+     disabled = danger (red, the stronger state). Reason/date strings are
+     rendered verbatim; the replacement is a clickable link styled like an
+     inline button. */
+  .deprecation-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-warning-subtle);
+    border: 1px solid var(--color-warning, #f59e0b);
+    border-radius: var(--radius-md);
+    color: var(--color-warning-strong);
+    font-size: var(--text-body-sm);
+  }
+  .deprecation-notice :global(svg) { flex: none; margin-top: 2px; }
+  .deprecation-notice.disabled {
+    background: var(--color-danger-subtle);
+    border-color: var(--color-danger);
+    color: var(--color-danger-on-subtle, var(--color-danger));
+  }
+  .deprecation-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .deprecation-line { margin: 0; line-height: var(--lh-normal); }
+  .deprecation-line strong { font-weight: var(--fw-semibold); }
+  .deprecation-date { font-variant-numeric: tabular-nums; opacity: 0.85; }
+  .deprecation-reason { opacity: 0.95; }
+  .deprecation-sub {
+    margin: 0;
+    font-size: var(--text-caption);
+    opacity: 0.85;
+  }
+  .deprecation-replacement {
+    margin: 2px 0 0 0;
+    color: var(--color-text-primary);
+  }
+  .deprecation-replacement-link {
+    display: inline;
+    padding: 0;
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    font-weight: var(--fw-semibold);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .deprecation-replacement-link:hover { text-decoration: none; }
   /* Render as a single flowing line: the icon is a flex child that
      doesn't shrink, and the whole sentence (including the inline <code>
      elements for license names) lives inside one span so it wraps as

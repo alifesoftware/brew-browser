@@ -155,6 +155,8 @@ pub struct Formula {
     pub disable_reason: Option<String>,
     #[serde(default)]
     pub dependencies: Vec<String>,
+    #[serde(default, alias = "build_dependencies")]
+    pub build_dependencies: Vec<String>,
     #[serde(default, alias = "recommended_dependencies")]
     pub recommended_dependencies: Vec<String>,
     #[serde(default, alias = "optional_dependencies")]
@@ -198,8 +200,25 @@ pub struct Cask {
     pub deprecation_reason: Option<String>,
     #[serde(default)]
     pub disabled: bool,
+    #[serde(default, alias = "disable_date")]
+    pub disable_date: Option<String>,
+    #[serde(default, alias = "disable_reason")]
+    pub disable_reason: Option<String>,
     pub version: Option<String>,
     pub tap: String,
+    /// Formulae this cask requires, plucked from the nested upstream
+    /// `depends_on.formula` array (e.g. cask `aptible` →
+    /// `["libfido2"]`). Used to surface a formula's *cask* reverse-
+    /// dependents — the macOS-only superset of the reverse-deps graph.
+    /// Empty for the vast majority of casks. See
+    /// [`deserialize_depends_on_formula`].
+    #[serde(
+        default,
+        rename = "dependsOnFormula",
+        alias = "depends_on",
+        deserialize_with = "deserialize_depends_on_formula"
+    )]
+    pub depends_on_formula: Vec<String>,
 }
 
 // ---------- Custom deserializers ----------
@@ -271,6 +290,44 @@ where
     Ok(None)
 }
 
+/// Pluck `depends_on.formula` out of the upstream cask `depends_on`
+/// object and produce a flat `Vec<String>` of formula tokens.
+///
+/// Upstream shape is a nested object, e.g.
+/// `{"macos": {...}, "formula": ["libfido2"]}`. The `formula` value is
+/// an array of bare formula tokens in this dataset; a few historical
+/// records have surfaced it as a single bare string, so we accept both.
+/// Missing / null `depends_on`, or a `depends_on` with no `formula`
+/// key, yields an empty vec. Any unexpected shape (number, bool)
+/// silently degrades to empty rather than failing the whole cask parse.
+fn deserialize_depends_on_formula<'de, D>(d: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    let Some(v) = v else { return Ok(Vec::new()) };
+    let Some(obj) = v.as_object() else {
+        return Ok(Vec::new());
+    };
+    let Some(formula) = obj.get("formula") else {
+        return Ok(Vec::new());
+    };
+    match formula {
+        serde_json::Value::String(s) => {
+            if s.trim().is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![s.clone()])
+            }
+        }
+        serde_json::Value::Array(arr) => Ok(arr
+            .iter()
+            .filter_map(|e| e.as_str().map(|s| s.to_string()))
+            .collect()),
+        _ => Ok(Vec::new()),
+    }
+}
+
 // ---------- Catalog ----------
 
 /// Full in-memory catalog. Backed by hash maps so commands can do O(1)
@@ -299,11 +356,10 @@ impl Catalog {
     /// ourselves (defense in depth — keeps the helper honest if someone
     /// later swaps the bundled bytes for a third-party feed).
     pub fn load_bundled() -> Result<Catalog, BrewError> {
-        let manifest: Manifest = serde_json::from_str(BUNDLED_MANIFEST).map_err(|e| {
-            BrewError::Internal {
+        let manifest: Manifest =
+            serde_json::from_str(BUNDLED_MANIFEST).map_err(|e| BrewError::Internal {
                 message: format!("bundled manifest parse failed: {e}"),
-            }
-        })?;
+            })?;
 
         let formulae_bytes = decompress_capped(BUNDLED_FORMULA_GZ, "bundled formula.json.gz")?;
         let casks_bytes = decompress_capped(BUNDLED_CASK_GZ, "bundled cask.json.gz")?;
@@ -347,13 +403,12 @@ impl Catalog {
         // Read all three with size caps. Anything bigger than the cap
         // is treated as corruption (Err), not silent truncation.
         let manifest_bytes = read_capped(&manifest_path, 1024 * 1024).await?;
-        let manifest: Manifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
-            BrewError::JsonParse {
+        let manifest: Manifest =
+            serde_json::from_slice(&manifest_bytes).map_err(|e| BrewError::JsonParse {
                 command: "load_user_data manifest.json".into(),
                 message: e.to_string(),
                 raw_excerpt: String::new(),
-            }
-        })?;
+            })?;
 
         let formula_gz = read_capped(&formula_path, MAX_CATALOG_BYTES).await?;
         let cask_gz = read_capped(&cask_path, MAX_CATALOG_BYTES).await?;
@@ -430,9 +485,11 @@ impl Catalog {
     ) -> Result<(), BrewError> {
         let dir = catalog_dir(app_data_dir);
         if !dir.exists() {
-            tokio::fs::create_dir_all(&dir).await.map_err(|e| BrewError::Io {
-                message: format!("create catalog dir {}: {}", dir.display(), e),
-            })?;
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(|e| BrewError::Io {
+                    message: format!("create catalog dir {}: {}", dir.display(), e),
+                })?;
         }
         atomic_write(&dir.join("formula.json.gz"), formulae_bytes).await?;
         atomic_write(&dir.join("cask.json.gz"), casks_bytes).await?;
@@ -522,6 +579,7 @@ fn validate_and_truncate_formula(f: &mut Formula) {
     truncate_opt_in_place(&mut f.versions_stable, MAX_FIELD_LEN);
     truncate_in_place(&mut f.tap, MAX_FIELD_LEN);
     truncate_vec_in_place(&mut f.dependencies, MAX_NAME_LEN);
+    truncate_vec_in_place(&mut f.build_dependencies, MAX_NAME_LEN);
     truncate_vec_in_place(&mut f.recommended_dependencies, MAX_NAME_LEN);
     truncate_vec_in_place(&mut f.optional_dependencies, MAX_NAME_LEN);
     truncate_vec_in_place(&mut f.conflicts_with, MAX_NAME_LEN);
@@ -537,6 +595,7 @@ fn validate_and_truncate_cask(c: &mut Cask) {
     truncate_opt_in_place(&mut c.deprecation_reason, MAX_FIELD_LEN);
     truncate_opt_in_place(&mut c.version, MAX_FIELD_LEN);
     truncate_in_place(&mut c.tap, MAX_FIELD_LEN);
+    truncate_vec_in_place(&mut c.depends_on_formula, MAX_NAME_LEN);
 }
 
 fn truncate_in_place(s: &mut String, max: usize) {
@@ -571,8 +630,7 @@ mod tests {
 
     #[test]
     fn manifest_parses() {
-        let m: Manifest =
-            serde_json::from_str(BUNDLED_MANIFEST).expect("bundled manifest parses");
+        let m: Manifest = serde_json::from_str(BUNDLED_MANIFEST).expect("bundled manifest parses");
         assert!(!m.as_of.is_empty());
         assert!(m.formula_count > 1000);
         assert!(m.cask_count > 1000);
@@ -639,7 +697,9 @@ mod tests {
         truncate_in_place(&mut s, 5);
         // Must not panic; result is valid utf-8.
         assert!(s.len() <= 5);
-        assert!(s.chars().all(|c| c.is_ascii() || c == '日' || c == '本' || c == '語'));
+        assert!(s
+            .chars()
+            .all(|c| c.is_ascii() || c == '日' || c == '本' || c == '語'));
     }
 
     #[test]
@@ -748,9 +808,11 @@ mod tests {
         // catalog naturally has hundreds, so any single one will do as
         // long as we don't pin to a specific name (those churn).
         let cat = Catalog::load_bundled().expect("load bundled");
-        let dep = cat.formulae.values().find(|f| f.deprecated).expect(
-            "bundled catalog should contain at least one deprecated formula",
-        );
+        let dep = cat
+            .formulae
+            .values()
+            .find(|f| f.deprecated)
+            .expect("bundled catalog should contain at least one deprecated formula");
         assert!(dep.deprecated);
         // Most deprecated formulae carry a reason — but it's not required,
         // so just check the flag plumbed through.
@@ -762,5 +824,52 @@ mod tests {
         let wget = cat.formulae.get("wget").expect("wget must be in catalog");
         assert_eq!(wget.name, "wget");
         assert!(wget.versions_stable.is_some());
+    }
+
+    #[test]
+    fn cask_parses_disable_date_and_reason() {
+        // Feature #2 — Cask gained `disable_date` / `disable_reason` (Formula
+        // already had them; the cask struct was missing them). Verify the
+        // snake-case upstream input shape deserializes into the new fields.
+        let raw = r#"{
+            "token": "legacy-app",
+            "name": ["Legacy App"],
+            "desc": "An app that is going away",
+            "homepage": "https://example.com",
+            "deprecated": true,
+            "deprecation_date": "2024-01",
+            "deprecation_reason": "no longer maintained",
+            "disabled": true,
+            "disable_date": "2025-06",
+            "disable_reason": "removed upstream",
+            "version": "1.0.0",
+            "tap": "homebrew/cask"
+        }"#;
+        let c: Cask = serde_json::from_str(raw).expect("parse cask");
+        assert!(c.deprecated);
+        assert_eq!(c.deprecation_date.as_deref(), Some("2024-01"));
+        assert_eq!(
+            c.deprecation_reason.as_deref(),
+            Some("no longer maintained")
+        );
+        assert!(c.disabled);
+        assert_eq!(c.disable_date.as_deref(), Some("2025-06"));
+        assert_eq!(c.disable_reason.as_deref(), Some("removed upstream"));
+    }
+
+    #[test]
+    fn bundled_catalog_has_disabled_formula_and_deprecated_cask() {
+        // Proves the deprecated/disabled flags plumb through real bundled
+        // data on BOTH namespaces — the offline baseline Feature #2 relies
+        // on. Names churn, so we only assert existence, never a specific token.
+        let cat = Catalog::load_bundled().expect("load bundled");
+        assert!(
+            cat.formulae.values().any(|f| f.disabled),
+            "bundled catalog should contain at least one disabled formula"
+        );
+        assert!(
+            cat.casks.values().any(|c| c.deprecated),
+            "bundled catalog should contain at least one deprecated cask"
+        );
     }
 }

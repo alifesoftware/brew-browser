@@ -10,6 +10,7 @@
 import { categoriesData, enrichmentLiveCategories, enrichmentLiveVersion } from "$lib/api";
 import { settings } from "$lib/stores/settings.svelte";
 import { isLinux } from "$lib/util/platform";
+import { subgroupsFor, type Subgroup } from "$lib/util/subcategories";
 import type { CategoriesData, PackageKind } from "$lib/types";
 
 interface CategoryTile {
@@ -131,6 +132,27 @@ class CategoriesStore {
     }
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
+  }
+
+  /**
+   * Feature #6 — sub-categories. Given a SINGLE selected category slug, group
+   * its members by their OTHER co-assigned category slugs (multi-label
+   * membership is the only genuine second-level signal in the flat
+   * `categories.json` — there is no taxonomy tree; see
+   * `util/subcategories.ts` for the full rationale). Members carrying ONLY
+   * the selected slug land in a pinned-last "General <Label>" bucket.
+   *
+   * Pure pass-through to {@link subgroupsFor}, threading the in-memory data
+   * and the Linux cask gate so callers don't re-implement either. Returns an
+   * empty list when data isn't loaded. Callers MUST only invoke this for a
+   * single selected category — multi-chip / search views stay flat.
+   *
+   * Linux: cask members are excluded from every sub-group and from the
+   * counts, matching the cask-free browse list (Discover.svelte browseItems).
+   * Native (macOS-only) implements the identical derivation for parity.
+   */
+  subgroupsInCategory(slug: string): Subgroup[] {
+    return subgroupsFor(this.data, slug, isLinux);
   }
 
   /** Pretty label for a slug. Falls back to the slug if data isn't loaded. */

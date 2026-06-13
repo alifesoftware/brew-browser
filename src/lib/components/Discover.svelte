@@ -9,6 +9,7 @@
   import Input from "./Input.svelte";
   import LoadingState from "./LoadingState.svelte";
   import EmptyState from "./EmptyState.svelte";
+  import InfoButton from "./InfoButton.svelte";
   import { search } from "$lib/stores/search.svelte";
   import { ui } from "$lib/stores/ui.svelte";
   import { packages } from "$lib/stores/packages.svelte";
@@ -62,6 +63,37 @@
    *  Sync — both lookups read pre-loaded in-memory state. */
   function descOf(token: string, kind: PackageKind): string | null {
     return enrichment.summaryOf(token) ?? catalog.descOf(token, kind);
+  }
+
+  /**
+   * Deprecation / disabled badge for a Discover row (Feature #2). Discover
+   * rows render off `SearchHit` / category tokens (no `Package`), so the
+   * bundled-catalog status is the source — `catalog.statusOf()`. `disabled`
+   * wins over `deprecated` when both are set (the stronger danger state).
+   * Returns null when the token isn't flagged (no badge, no placeholder).
+   * Catalog-sourced → flags-only; the replacement "use X instead" link is
+   * PackageDetail-only (brew info carries it; the catalog doesn't).
+   */
+  function deprecationBadgeOf(
+    token: string,
+    kind: PackageKind,
+  ): { label: string; tone: "warning" | "danger"; title: string } | null {
+    const s = catalog.statusOf(token, kind);
+    if (!s) return null;
+    if (s.disabled) {
+      return {
+        label: "disabled",
+        tone: "danger",
+        title: s.reason ? `Disabled: ${s.reason}` : "Disabled — no longer available via Homebrew.",
+      };
+    }
+    return {
+      label: "deprecated",
+      tone: "warning",
+      title: s.reason
+        ? `Deprecated: ${s.reason}`
+        : "Deprecated — may be removed in a future Homebrew update.",
+    };
   }
 
   async function refreshFromBanner() {
@@ -143,7 +175,66 @@
     }
     return `${discover.selectedCategories.size} categories`;
   });
+
+  /**
+   * Feature #6 — sub-categories. Co-occurrence sub-grouping is ONLY defined
+   * for a single selected category; multi-chip selections stay flat
+   * (`browseItems` above). The store handles the Linux cask gate, dedup, and
+   * deterministic ordering (descending count, tie-break slug, "General"
+   * bucket pinned last). Empty array → render the flat list as before.
+   *
+   * Degenerate case: a category whose every member is solo collapses to a
+   * single "General <Label>" bucket — rendering one lone sub-group header
+   * above the full list looks broken, so we treat a single-bucket result as
+   * "not worth sub-grouping" and fall through to the flat list.
+   */
+  let subgroups = $derived.by(() => {
+    if (discover.selectedCategories.size !== 1) return [];
+    const [slug] = discover.selectedCategories;
+    const groups = categories.subgroupsInCategory(slug);
+    return groups.length > 1 ? groups : [];
+  });
+
+  let showSubgroups = $derived(subgroups.length > 0);
 </script>
+
+<!-- Browse-row snippet — shared by the flat chip-filtered list and the
+     Feature #6 sub-grouped sections so the 5-column row markup lives in one
+     place. -->
+{#snippet browseRow(h: { name: string; kind: PackageKind })}
+  {@const installed = packages.isInstalled(h.name, h.kind)}
+  {@const isSelected = ui.selectedPackage?.name === h.name && ui.selectedPackage?.kind === h.kind}
+  <li>
+    <button
+      class="row row--with-desc"
+      class:selected={isSelected}
+      aria-current={isSelected ? "true" : undefined}
+      onclick={() => openHit(h)}
+    >
+      <span class="name-cell">
+        <PackageRowIcon token={h.name} kind={h.kind} resolveCask />
+        <span class="name truncate">
+          <span class="name-text">{h.name}</span>
+          {#if friendlyOf(h.name)}
+            <span class="friendly-subtitle">{friendlyOf(h.name)}</span>
+          {/if}
+        </span>
+      </span>
+      <span class="desc truncate text-muted">{descOf(h.name, h.kind) ?? ""}</span>
+      <span class="version truncate text-muted">{catalog.versionOf(h.name, h.kind) ?? ""}</span>
+      <span class="kind">
+        <Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill>
+        {#if deprecationBadgeOf(h.name, h.kind)}
+          {@const b = deprecationBadgeOf(h.name, h.kind)!}
+          <span title={b.title}><Pill tone={b.tone}>{b.label}</Pill></span>
+        {/if}
+      </span>
+      <span class="installed">
+        {#if installed}<Pill tone="success">installed</Pill>{/if}
+      </span>
+    </button>
+  </li>
+{/snippet}
 
 <section class="discover">
   <!-- Pane title moved to the window title bar (+page.svelte).
@@ -272,7 +363,13 @@
               </span>
               <span class="desc truncate text-muted">{enrichment.summaryOf(h.name) ?? h.description ?? ""}</span>
               <span class="version truncate text-muted">{catalog.versionOf(h.name, h.kind) ?? ""}</span>
-              <span class="kind"><Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill></span>
+              <span class="kind">
+                <Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill>
+                {#if deprecationBadgeOf(h.name, h.kind)}
+                  {@const b = deprecationBadgeOf(h.name, h.kind)!}
+                  <span title={b.title}><Pill tone={b.tone}>{b.label}</Pill></span>
+                {/if}
+              </span>
               <span class="installed">
                 {#if installed}<Pill tone="success">installed</Pill>{/if}
               </span>
@@ -286,40 +383,38 @@
       <div class="cat-header">
         <h2>{browseTitle}</h2>
         <span class="text-muted">{fmt(browseItems.length)} packages</span>
+        {#if showSubgroups}
+          <span class="subgroup-note text-muted">grouped by overlapping category</span>
+          <InfoButton
+            title="How these sub-groups are built"
+            label="About sub-categories"
+            body={`Homebrew has no official sub-category data, so this is a co-occurrence grouping: within "${browseTitle}", packages are bucketed by the OTHER categories they also belong to. A package with several overlapping categories appears in each bucket. "General ${browseTitle}" holds packages tagged only "${browseTitle}" — it's often the largest group, and this is a grouping aid, not a strict taxonomy.`}
+          />
+        {/if}
       </div>
       {#if browseItems.length === 0}
         <EmptyState title="No packages match this filter." body="">
           {#snippet icon()}<SearchIcon size={48} />{/snippet}
         </EmptyState>
+      {:else if showSubgroups}
+        <!-- Feature #6: sub-grouped view (single category selected). Section
+             header per co-occurring category + a pinned-last "General" bucket.
+             Counts match the cask-free browse list on Linux (store-gated). -->
+        {#each subgroups as g (g.key)}
+          <div class="subgroup-head">
+            <h3>{g.label}</h3>
+            <span class="text-muted">{fmt(g.items.length)}</span>
+          </div>
+          <ul class="list" aria-label={`Packages in ${g.label}`}>
+            {#each g.items as h (h.name + h.kind)}
+              {@render browseRow(h)}
+            {/each}
+          </ul>
+        {/each}
       {:else}
         <ul class="list" aria-label={`Packages in ${browseTitle}`}>
           {#each browseItems as h (h.name + h.kind)}
-            {@const installed = packages.isInstalled(h.name, h.kind)}
-            {@const isSelected = ui.selectedPackage?.name === h.name && ui.selectedPackage?.kind === h.kind}
-            <li>
-              <button
-                class="row row--with-desc"
-                class:selected={isSelected}
-                aria-current={isSelected ? "true" : undefined}
-                onclick={() => openHit(h)}
-              >
-                <span class="name-cell">
-                  <PackageRowIcon token={h.name} kind={h.kind} resolveCask />
-                  <span class="name truncate">
-                    <span class="name-text">{h.name}</span>
-                    {#if friendlyOf(h.name)}
-                      <span class="friendly-subtitle">{friendlyOf(h.name)}</span>
-                    {/if}
-                  </span>
-                </span>
-                <span class="desc truncate text-muted">{descOf(h.name, h.kind) ?? ""}</span>
-                <span class="version truncate text-muted">{catalog.versionOf(h.name, h.kind) ?? ""}</span>
-                <span class="kind"><Pill tone={h.kind === "formula" ? "formula" : "cask"}>{h.kind}</Pill></span>
-                <span class="installed">
-                  {#if installed}<Pill tone="success">installed</Pill>{/if}
-                </span>
-              </button>
-            </li>
+            {@render browseRow(h)}
           {/each}
         </ul>
       {/if}
@@ -578,6 +673,16 @@
     font-variant-numeric: tabular-nums;
     color: var(--color-text-secondary);
   }
+  /* Kind cell hosts the type pill plus the optional deprecation/disabled
+     badge (Feature #2). Flex-wrap so a second pill drops below the kind
+     pill on the narrow 80px track rather than overflowing the cell. */
+  .kind {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    overflow: visible;
+  }
   .installed { justify-self: end; min-width: 0; }
 
   /* ── Phase 9: category tile grid ─────────────────────────── */
@@ -629,5 +734,34 @@
     font-size: var(--text-h3, 1.05rem);
     font-weight: var(--fw-medium);
     margin: 0;
+  }
+  /* Feature #6 — the "grouped by overlapping category" caption + (i) sit at
+     the end of the cat-header, after the package count. */
+  .subgroup-note {
+    font-size: var(--text-body-sm);
+  }
+  .cat-header :global(.trigger) {
+    margin-left: -2px;
+  }
+
+  /* Feature #6 — sub-group section header. Lighter than the .cat-header so it
+     reads as a sub-level divider, not a new pane title. Sticky so the active
+     sub-group label stays visible while scrolling its members. */
+  .subgroup-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    background: var(--color-surface-sunken);
+    border-bottom: 1px solid var(--color-border);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .subgroup-head h3 {
+    font-size: var(--text-body);
+    font-weight: var(--fw-semibold);
+    margin: 0;
+    color: var(--color-text-secondary);
   }
 </style>

@@ -17,6 +17,10 @@ struct ActivityJob: Identifiable, Hashable, Codable, Sendable {
     var lines: [ActivityLine]
     var exitCode: Int32?
     var durationMs: Int?
+    /// Friendly explanation for classified environmental/upstream failures.
+    /// When present, the Activity drawer shows this instead of the generic
+    /// failure footer and does not offer "Report to brew-browser".
+    var friendlyFailureMessage: String?
     /// Best-effort live progress from brew's `==>` markers (running jobs).
     /// Mirrors the Tauri `ActivityJob.progress`. See #57.
     var progress: JobProgress?
