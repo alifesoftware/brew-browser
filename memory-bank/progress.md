@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-06-15 — Shipped 0.6.0/0.2.0 + Homebrew-6 fixes + issue triage (see task 16)
+
+- **SHIPPED: brew-browser 0.6.0 / native 0.2.0** — feature batch #1–#6 + Brew Doctor/Cleanup (#80) + friendly-error surfacing, both shells, signed/notarized, both auto-update feeds live. Reddit launch did well (#2 on r/MacOS, 700+ stars).
+- **Homebrew 6.x fallout fixed:** tap-trust now mandatory (install docs → 3-line `tap`/`trust`/`install`); tap cask bumped to 0.6.0 + dual-arch (Intel users were blocked); landing favicon added (fixed our own cask icon being blank).
+- **Report-button brew-vs-app fix (PR #91):** app no longer invites GitHub reports for Homebrew command failures — only genuine app/IPC errors. Stops the `[brew-browser] X failed` issue flood at the source.
+- **Issue backlog triaged 52 → 8 open.** Remaining: 2 `bug` (both vulnerability-scan: #62 json_parse, #92 strict formula-name validation — fix together), 6 `enhancement` (update/install-options #90/#47/#13, #88 scrollbar, #31 `brew cu` parity, #16 localization).
+- **NEXT:** vuln-scan bug fix (#62 + #92) is the highest-value next task. Full running state in the agent auto-memory `project-resume-state.md`.
+
 ## 2026-06-13 — feature-request batch (both builds), staged for Tauri 0.6.0 / native 0.2.0
 
 - ✅ Six community feature requests built across **both** builds, one per commit on `feat/feature-requests`: reverse dependencies ("Required by") in detail, deprecated/disabled package indicators, a Manual vs Dependency filter in the Library, per-package on-disk size, a Recent-changes Dashboard card, and **Discover sub-categories** (#6).
