@@ -33,7 +33,7 @@ use std::process::Stdio;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::process::Command;
 
-use crate::brew::exec::run_brew_capture;
+use crate::brew::exec::{apply_brew_env, run_brew_capture};
 use crate::error::{truncate_tail, BrewError};
 
 /// Tolerant subprocess wrapper for `brew vulns`. Differs from
@@ -57,6 +57,7 @@ async fn run_vulns_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    apply_brew_env(&mut cmd);
 
     let output = cmd.output().await.map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => BrewError::BrewNotFound,
@@ -279,6 +280,7 @@ pub async fn check_brew_vulns_installed(brew: &Path) -> Result<bool, BrewError> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    apply_brew_env(&mut cmd);
 
     let output = cmd.output().await.map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => BrewError::BrewNotFound,
@@ -494,6 +496,7 @@ async fn brew_version(brew: &Path) -> Result<String, BrewError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    apply_brew_env(&mut cmd);
     let output = cmd.output().await.map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => BrewError::BrewNotFound,
         _ => BrewError::Io {
