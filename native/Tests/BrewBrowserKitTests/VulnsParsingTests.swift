@@ -81,9 +81,68 @@ struct VulnsParseTests {
         #expect(try VulnsService.parseScanOutputKeyed("   \n  ").isEmpty)
     }
 
-    @Test func malformedOutputThrows() {
+    @Test func pureProseYieldsNoRecords() throws {
+        // Issue #62: a clean exit with non-JSON prose on stdout (e.g. an
+        // unsupported-source notice) is "nothing to report", not an error.
+        #expect(try VulnsService.parseScanOutputKeyed("whatcable: skipped\n").isEmpty)
+        #expect(try VulnsService.parseScanOutputKeyed("this is not json").isEmpty)
+    }
+
+    @Test func salvagesJSONBehindLeadingNoise() throws {
+        // Issue #62: a brew banner/notice on stdout before the --json document.
+        let raw = """
+        Warning: some brew notice
+        [ { "formula": "curl", "version": "8.4.0", "vulnerabilities": [] } ]
+        """
+        let out = try VulnsService.parseScanOutputKeyed(raw)
+        #expect(out["curl"] != nil)
+        #expect(out["curl"]?.isEmpty == true)
+    }
+
+    @Test func salvagesJSONBetweenNoiseLines() throws {
+        let raw = """
+        ==> downloading advisories
+        [ { "formula": "openssl@3", "version": "3.2.0", "vulnerabilities": [] } ]
+        ==> done
+        """
+        let out = try VulnsService.parseScanOutputKeyed(raw)
+        #expect(out["openssl@3"] != nil)
+    }
+
+    @Test func malformedJSONPayloadThrows() {
+        // A bracketed-but-broken payload is a genuine problem, still surfaced.
         #expect(throws: (any Error).self) {
-            _ = try VulnsService.parseScanOutputKeyed("this is not json")
+            _ = try VulnsService.parseScanOutputKeyed("notice\n[ {broken json ]\n")
+        }
+    }
+
+    @Test func extractJSONDocumentSkipsSurroundingLines() {
+        #expect(VulnsService.extractJSONDocument("lead\n  [1,2,3]  \ntrail") == "  [1,2,3]  ")
+        #expect(VulnsService.extractJSONDocument("no json here") == nil)
+    }
+}
+
+@Suite("VulnsService.validateFormulaName")
+struct VulnsValidateNameTests {
+    @Test func acceptsTypicalAndTapQualifiedNames() throws {
+        for name in [
+            "curl", "openssl@3", "python@3.12", "git-lfs", "lib_foo",
+            // Issue #92: third-party tap formulae are `user/repo/name`.
+            "anomalyco/tap/opencode", "homebrew/core/wget", "user-name/repo_2/formula@1.2",
+        ] {
+            try VulnsService.validateFormulaName(name)  // throws on reject
+        }
+    }
+
+    @Test func rejectsMalformedSlashesAndShellMeta() {
+        for bad in [
+            "/leading", "trailing/", "a//b", "two/segments", "a/b/c/d",
+            "a/../b", "../etc/passwd", "./relative",
+            "curl; rm -rf /", "curl|nc", "curl`whoami`", "curl $(id)", "",
+        ] {
+            #expect(throws: (any Error).self, "should reject: \(bad)") {
+                try VulnsService.validateFormulaName(bad)
+            }
         }
     }
 }

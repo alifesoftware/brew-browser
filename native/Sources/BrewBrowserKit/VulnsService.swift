@@ -257,7 +257,13 @@ struct VulnsService: Sendable {
         // brew vulns IGNORES --formula and returns the whole install set, so we
         // must keep only the requested formula's record — otherwise the detail
         // card shows every other package's CVEs (boost/icu/jxl/…) under this one.
-        return records.first(where: { $0.formula == name })?.findings ?? []
+        // brew vulns may echo a tap-qualified name under its bare form (or
+        // vice-versa), so match the exact name OR the last `/`-segment (#92).
+        let wantTail = name.split(separator: "/").last.map(String.init) ?? name
+        return records.first(where: {
+            $0.formula == name
+                || $0.formula.split(separator: "/").last.map(String.init) == wantTail
+        })?.findings ?? []
     }
 
     /// Scan the WHOLE install set in ONE `brew vulns --json` call (no
@@ -466,8 +472,33 @@ struct VulnsService: Sendable {
     private static func parseScanOutput(_ raw: String) throws -> [ScanRecord] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        guard let data = trimmed.data(using: .utf8) else { return [] }
 
+        // Fast path: the whole stdout is the JSON document (the common case).
+        if let records = decodeRecords(trimmed) {
+            return records
+        }
+        // Salvage: older brew / brew-vulns can print a banner or notice on
+        // stdout around the `--json` document (issue #62 — `whatcable` on brew
+        // 5.1.15). Slice the JSON document out of the surrounding line-oriented
+        // noise and retry. Mirrors the Rust `extract_json_document`.
+        if let slice = extractJSONDocument(trimmed) {
+            if let records = decodeRecords(slice) {
+                return records
+            }
+            // A JSON-looking payload was present but malformed → surface it.
+            throw VulnsServiceError.decodeFailed("output starts: \(String(trimmed.prefix(400)))")
+        }
+        // No JSON structure at all on a clean exit (already past the exit-≥2
+        // gate in the caller). Treat as "nothing to report" rather than a
+        // scary decode error — consistent with scanAll silently omitting
+        // unsupported-forge formulae (issue #62).
+        return []
+    }
+
+    /// Decode both documented shapes: an array (the norm) then a single object
+    /// (defensive fallback). `nil` if the input isn't valid JSON in either shape.
+    private static func decodeRecords(_ s: String) -> [ScanRecord]? {
+        guard let data = s.data(using: .utf8) else { return nil }
         let decoder = JSONDecoder()
         if let array = try? decoder.decode([ScanRecord].self, from: data) {
             return array
@@ -475,21 +506,56 @@ struct VulnsService: Sendable {
         if let single = try? decoder.decode(ScanRecord.self, from: data) {
             return [single]
         }
-        // Surface a typed decode failure with a bounded excerpt.
-        throw VulnsServiceError.decodeFailed("output starts: \(String(trimmed.prefix(400)))")
+        return nil
+    }
+
+    /// Extract the JSON document from line-oriented CLI noise: from the first
+    /// line that (left-trimmed) starts with `[`/`{` to the last line that
+    /// (right-trimmed) ends with `]`/`}`. Line-granular so a stray bracket in a
+    /// mid-sentence warning doesn't derail extraction. `nil` when no such
+    /// bracketed block exists. Mirrors the Rust `extract_json_document`.
+    static func extractJSONDocument(_ raw: String) -> String? {
+        let lines = raw.components(separatedBy: "\n")
+        let ws = CharacterSet(charactersIn: " \t")
+        guard
+            let start = lines.firstIndex(where: {
+                let t = $0.trimmingCharacters(in: ws)
+                return t.first == "[" || t.first == "{"
+            }),
+            let end = lines.lastIndex(where: {
+                let t = $0.trimmingCharacters(in: ws)
+                return t.last == "]" || t.last == "}"
+            }),
+            start <= end
+        else { return nil }
+        return lines[start...end].joined(separator: "\n")
     }
 
     /// Validate a formula name before passing it to `brew vulns
     /// --formula`. Defense-in-depth against shell-meta injection even
     /// though `Process`/argv is already injection-safe — mirrors the
     /// Rust `validate_formula_name`.
-    private static func validateFormulaName(_ name: String) throws {
+    static func validateFormulaName(_ name: String) throws {
         guard !name.isEmpty, name.count <= 128 else {
             throw VulnsServiceError.invalidFormulaName(name)
         }
+        // Allow `/` so tap-qualified names (`user/repo/name`) pass — brew vulns
+        // accepts them and users scan formulae from third-party taps (issue #92,
+        // `anomalyco/tap/opencode`). Process/argv is injection-safe and the
+        // vulns cache keys names into a map, NOT a path, so `/` adds no risk;
+        // the structure guard below keeps it tight. Mirrors the Rust validator.
         let allowed = CharacterSet(charactersIn:
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_+@.")
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_+@./")
         guard name.unicodeScalars.allSatisfy(allowed.contains) else {
+            throw VulnsServiceError.invalidFormulaName(name)
+        }
+        // A tap-qualified name is exactly `user/repo/name` (2 slashes); a bare
+        // name has none. Reject anything else — empty segments, leading/trailing
+        // slash, `a//b`, `.`/`..` path segments, or deeper paths.
+        let segments = name.split(separator: "/", omittingEmptySubsequences: false)
+        let wellFormed = (segments.count == 1 || segments.count == 3)
+            && segments.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+        guard wellFormed else {
             throw VulnsServiceError.invalidFormulaName(name)
         }
     }

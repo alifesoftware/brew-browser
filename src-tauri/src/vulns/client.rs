@@ -303,8 +303,14 @@ pub async fn scan_all(brew: &Path) -> Result<Vec<RawScanResult>, BrewError> {
     // structured output mode brew-vulns supports for CI consumption.
     // Uses the tolerant wrapper because brew-vulns exits 1 on
     // "findings present" (CI-scanner convention) and we want the JSON.
-    let raw = run_vulns_capture(brew, &["vulns", "--json"], "brew vulns --json").await?;
-    parse_scan_output(&raw, "brew vulns --json")
+    // `--quiet` suppresses brew's own progress/banner chatter so it can't land
+    // on stdout and break JSON parsing (parity with the native scanner, and
+    // belt-and-suspenders for issue #62). parse_scan_output also salvages JSON
+    // from any residual noise.
+    let raw =
+        run_vulns_capture(brew, &["vulns", "--quiet", "--json"], "brew vulns --quiet --json")
+            .await?;
+    parse_scan_output(&raw, "brew vulns --quiet --json")
 }
 
 /// Scan a single formula by name. Used by the PackageDetail
@@ -312,16 +318,25 @@ pub async fn scan_all(brew: &Path) -> Result<Vec<RawScanResult>, BrewError> {
 /// [`RawVuln`] list since the caller already knows the formula name.
 pub async fn scan_one(brew: &Path, formula: &str) -> Result<Vec<RawVuln>, BrewError> {
     validate_formula_name(formula)?;
-    let display = format!("brew vulns --json --formula {formula}");
+    let display = format!("brew vulns --quiet --json --formula {formula}");
     // Tolerant wrapper — same exit-1-is-findings semantics as scan_all.
-    let raw = run_vulns_capture(brew, &["vulns", "--json", "--formula", formula], &display).await?;
+    // `--quiet` parity with scan_all (issue #62).
+    let raw = run_vulns_capture(
+        brew,
+        &["vulns", "--quiet", "--json", "--formula", formula],
+        &display,
+    )
+    .await?;
     let results = parse_scan_output(&raw, &display)?;
     // brew vulns IGNORES --formula and returns the WHOLE install set, so keep
     // only the requested formula's record — otherwise the detail card shows
-    // every other package's CVEs (boost/icu/jxl/…) under this one.
+    // every other package's CVEs (boost/icu/jxl/…) under this one. brew vulns
+    // may echo a tap-qualified name under its bare form (or vice-versa), so
+    // match the exact name OR the last `/`-segment (issue #92).
+    let want_tail = formula.rsplit('/').next().unwrap_or(formula);
     Ok(results
         .into_iter()
-        .find(|r| r.formula == formula)
+        .find(|r| r.formula == formula || r.formula.rsplit('/').next() == Some(want_tail))
         .map(|r| r.vulnerabilities)
         .unwrap_or_default())
 }
@@ -356,19 +371,63 @@ fn parse_scan_output(raw: &str, display_command: &str) -> Result<Vec<RawScanResu
     if raw.trim().is_empty() {
         return Ok(Vec::new());
     }
-    // Try array first (the documented shape).
-    if let Ok(arr) = serde_json::from_str::<Vec<RawScanResult>>(raw) {
-        return Ok(arr);
+    // Fast path: the whole stdout is the JSON document (the common case).
+    if let Some(parsed) = try_parse_records(raw) {
+        return Ok(parsed);
     }
-    // Fall back to single object.
-    match serde_json::from_str::<RawScanResult>(raw) {
-        Ok(one) => Ok(vec![one]),
-        Err(e) => Err(BrewError::JsonParse {
+    // Salvage: older brew / brew-vulns versions can print a banner or notice
+    // on stdout around the `--json` document (issue #62 — `whatcable` on brew
+    // 5.1.15 produced "expected value at line 1 column 1"). Slice the JSON
+    // document out of the surrounding line-oriented noise and retry.
+    if let Some(slice) = extract_json_document(raw) {
+        if let Some(parsed) = try_parse_records(&slice) {
+            return Ok(parsed);
+        }
+        // A JSON-looking payload was present but malformed → a genuine
+        // problem worth surfacing (keeps the garbage-input contract).
+        return Err(BrewError::JsonParse {
             command: display_command.to_string(),
-            message: format!("vulns parse: {e}"),
+            message: "vulns parse: could not parse JSON document in output".to_string(),
             raw_excerpt: raw.chars().take(400).collect(),
-        }),
+        });
     }
+    // No JSON structure at all on a clean exit (run_vulns_capture already
+    // surfaced exit ≥2 as an error before we got here). Treat as "nothing to
+    // report" — consistent with scan_all silently omitting unsupported-forge
+    // formulae — rather than a scary parse error in the user's face.
+    Ok(Vec::new())
+}
+
+/// Try both documented shapes: an array (the norm) then a single object
+/// (defensive fallback). `None` if the input isn't valid JSON in either shape.
+fn try_parse_records(s: &str) -> Option<Vec<RawScanResult>> {
+    if let Ok(arr) = serde_json::from_str::<Vec<RawScanResult>>(s) {
+        return Some(arr);
+    }
+    serde_json::from_str::<RawScanResult>(s)
+        .ok()
+        .map(|one| vec![one])
+}
+
+/// Extract the JSON document from line-oriented CLI noise: from the first
+/// line that (left-trimmed) starts with `[`/`{` to the last line that
+/// (right-trimmed) ends with `]`/`}`. Line-granular so a stray bracket in a
+/// mid-sentence warning doesn't derail extraction. `None` when no such
+/// bracketed block exists (pure prose → caller treats as "no results").
+fn extract_json_document(raw: &str) -> Option<String> {
+    let lines: Vec<&str> = raw.lines().collect();
+    let start = lines.iter().position(|l| {
+        let t = l.trim_start();
+        t.starts_with('[') || t.starts_with('{')
+    })?;
+    let end = lines.iter().rposition(|l| {
+        let t = l.trim_end();
+        t.ends_with(']') || t.ends_with('}')
+    })?;
+    if start > end {
+        return None;
+    }
+    Some(lines[start..=end].join("\n"))
 }
 
 /// Validate a brew formula name before passing it to `brew vulns
@@ -383,10 +442,27 @@ pub fn validate_formula_name(name: &str) -> Result<(), BrewError> {
             message: format!("invalid formula name length: {}", name.len()),
         });
     }
+    // Allow `/` so tap-qualified names (`user/repo/name`) pass — brew vulns
+    // accepts them and users scan formulae from third-party taps (issue #92,
+    // `anomalyco/tap/opencode`). `Command::arg` is argv-safe (no shell) and the
+    // vulns cache keys names into a JSON map string, NOT a filesystem path
+    // (see vulns/cache.rs), so `/` introduces no injection/traversal risk; the
+    // structure guard below keeps the surface tight.
     let ok = name
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '@' | '.'));
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '@' | '.' | '/'));
     if !ok {
+        return Err(BrewError::InvalidArgument {
+            message: format!("invalid character(s) in formula name: {name}"),
+        });
+    }
+    // A tap-qualified name is exactly `user/repo/name` (2 slashes); a bare name
+    // has none. Reject anything else — empty segments, leading/trailing slash,
+    // `a//b`, `.`/`..` path segments, or deeper paths.
+    let segments: Vec<&str> = name.split('/').collect();
+    let well_formed = matches!(segments.len(), 1 | 3)
+        && segments.iter().all(|s| !s.is_empty() && *s != "." && *s != "..");
+    if !well_formed {
         return Err(BrewError::InvalidArgument {
             message: format!("invalid character(s) in formula name: {name}"),
         });
@@ -566,6 +642,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_scan_output_salvages_json_behind_leading_noise() {
+        // Issue #62: a brew banner/notice on stdout before the --json document.
+        let raw = "Warning: some brew notice\n[{\"formula\":\"curl\",\"version\":\"8.4.0\",\"vulnerabilities\":[]}]";
+        let parsed = parse_scan_output(raw, "brew vulns --quiet --json").expect("salvaged");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].formula, "curl");
+    }
+
+    #[test]
+    fn parse_scan_output_salvages_json_between_noise_lines() {
+        let raw = "==> downloading advisories\n[{\"formula\":\"openssl@3\",\"version\":\"3.2.0\",\"vulnerabilities\":[]}]\n==> done";
+        let parsed = parse_scan_output(raw, "brew vulns --quiet --json").expect("salvaged");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].formula, "openssl@3");
+    }
+
+    #[test]
+    fn parse_scan_output_pure_prose_yields_empty_not_error() {
+        // No JSON structure at all on a clean exit → treat as "no results"
+        // rather than a json_parse error in the user's face (issue #62).
+        assert_eq!(
+            parse_scan_output("whatcable: skipped (unsupported source)\n", "test")
+                .expect("no error")
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn parse_scan_output_malformed_payload_still_errors() {
+        // A bracketed-but-broken payload is a genuine problem, still surfaced.
+        let err = parse_scan_output("notice\n[ {broken json ]\n", "brew vulns --quiet --json")
+            .unwrap_err();
+        assert!(matches!(err, BrewError::JsonParse { .. }));
+    }
+
+    #[test]
+    fn extract_json_document_skips_surrounding_lines() {
+        let raw = "lead\n  [1,2,3]  \ntrail";
+        assert_eq!(extract_json_document(raw).as_deref(), Some("  [1,2,3]  "));
+        assert_eq!(extract_json_document("no json here").as_deref(), None);
+    }
+
     // ----- validate_formula_name -----
 
     #[test]
@@ -579,6 +699,35 @@ mod tests {
             "lib_foo",
         ] {
             assert!(validate_formula_name(name).is_ok(), "should accept: {name}");
+        }
+    }
+
+    #[test]
+    fn validate_formula_name_accepts_tap_qualified_names() {
+        // Issue #92: third-party tap formulae are `user/repo/name`.
+        for name in [
+            "anomalyco/tap/opencode",
+            "homebrew/core/wget",
+            "user-name/repo_2/formula@1.2",
+        ] {
+            assert!(validate_formula_name(name).is_ok(), "should accept: {name}");
+        }
+    }
+
+    #[test]
+    fn validate_formula_name_rejects_malformed_slashes() {
+        // `/` is allowed only in the exact `user/repo/name` shape.
+        for bad in [
+            "/leading",
+            "trailing/",
+            "a//b",
+            "two/segments",
+            "a/b/c/d",
+            "a/../b",
+            "../etc/passwd",
+            "./relative",
+        ] {
+            assert!(validate_formula_name(bad).is_err(), "should reject: {bad}");
         }
     }
 
