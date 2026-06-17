@@ -167,6 +167,20 @@ pub(crate) async fn refresh_catalog_inner(state: &AppState) -> Result<CatalogSum
     let formula_count = count_top_level_array(&formula_raw, FORMULA_URL)?;
     let cask_count = count_top_level_array(&cask_raw, CASK_URL)?;
 
+    // Reject an empty response: formulae.brew.sh always returns thousands
+    // of entries. A zero count means the body parsed as JSON but is empty
+    // (a hostile mirror, a partial response, or a CDN error page that
+    // happens to be a JSON array). Persisting it would silently zero out
+    // the user's catalog.
+    if formula_count == 0 || cask_count == 0 {
+        return Err(BrewError::InvalidArgument {
+            message: format!(
+                "catalog response is empty (formulae={}, casks={})",
+                formula_count, cask_count
+            ),
+        });
+    }
+
     // gzip both — this is what we'll persist + what `load_user_data`
     // expects on next launch.
     let formula_gz = gzip_compress(&formula_raw)?;
