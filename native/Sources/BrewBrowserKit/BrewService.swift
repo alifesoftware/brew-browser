@@ -132,6 +132,25 @@ struct BrewService: Sendable {
     /// Run a brew subcommand to completion and return captured stdout.
     /// `current_dir` is pinned to "/" to dodge the "cwd must be readable"
     /// failure the Linux build hit — harmless on macOS, future-proof.
+    /// Environment for every `brew` subprocess this app spawns.
+    ///
+    /// `HOMEBREW_NO_ANALYTICS=1` disables Homebrew's own analytics so our
+    /// automated brew calls never trigger its ping to Homebrew's InfluxDB
+    /// endpoint (`*.influxdata.com`). Brew Browser sends no telemetry, and must
+    /// not cause `brew` to send any on the user's behalf either — a user
+    /// reported the startup `*.influxdata.com` connection, which was Homebrew's,
+    /// fired because we shell out to `brew`. The user's OWN global brew-analytics
+    /// preference (for manual CLI use) is untouched. `NO_COLOR`/`NO_ENV_HINTS`
+    /// keep brew's terminal chatter out of captured/streamed output.
+    /// See https://docs.brew.sh/Analytics.
+    static func brewEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["HOMEBREW_NO_ANALYTICS"] = "1"
+        env["HOMEBREW_NO_COLOR"] = "1"
+        env["HOMEBREW_NO_ENV_HINTS"] = "1"
+        return env
+    }
+
     private func runCapture(_ args: [String]) async throws -> String {
         guard let brew = Self.resolveBrewPath() else { throw BrewError.brewNotFound }
 
@@ -139,6 +158,7 @@ struct BrewService: Sendable {
         process.executableURL = URL(fileURLWithPath: brew)
         process.arguments = args
         process.currentDirectoryURL = URL(fileURLWithPath: "/")
+        process.environment = Self.brewEnvironment()
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -237,11 +257,9 @@ struct BrewService: Sendable {
             process.standardOutput = outPipe
             process.standardError = errPipe
             // Tell brew not to expect a terminal (disables spinners/color that
-            // would otherwise garble the streamed lines).
-            var env = ProcessInfo.processInfo.environment
-            env["HOMEBREW_NO_COLOR"] = "1"
-            env["HOMEBREW_NO_ENV_HINTS"] = "1"
-            process.environment = env
+            // would otherwise garble the streamed lines) and disable Homebrew's
+            // own analytics ping (see brewEnvironment()).
+            process.environment = Self.brewEnvironment()
 
             let outHandle = outPipe.fileHandleForReading
             let errHandle = errPipe.fileHandleForReading

@@ -53,6 +53,26 @@ pub type JobsMap = Arc<Mutex<HashMap<Uuid, JobHandle>>>;
 /// the readable-cwd error, surfacing as "Couldn't load packages."
 const BREW_SPAWN_CWD: &str = "/";
 
+/// Environment overrides applied to EVERY `brew` subprocess this app spawns.
+///
+/// `HOMEBREW_NO_ANALYTICS=1` disables Homebrew's own analytics so our
+/// automated brew calls never trigger its ping to Homebrew's InfluxDB
+/// endpoint (`*.influxdata.com`). Brew Browser itself sends no telemetry, and
+/// it must not cause `brew` to send any on the user's behalf either — a user
+/// reported the startup `*.influxdata.com` connection, which was Homebrew's,
+/// fired because we shell out to `brew`. The user's OWN global brew-analytics
+/// preference (for their manual CLI use) is untouched; this only scopes the
+/// commands WE spawn. See https://docs.brew.sh/Analytics.
+pub(crate) const BREW_ENV: &[(&str, &str)] = &[("HOMEBREW_NO_ANALYTICS", "1")];
+
+/// Apply [`BREW_ENV`] to a brew command. Call at every spawn site so no
+/// `brew` invocation can leak past the analytics-off policy.
+pub(crate) fn apply_brew_env(cmd: &mut Command) {
+    for (key, val) in BREW_ENV {
+        cmd.env(key, val);
+    }
+}
+
 pub async fn run_brew_capture(
     brew_path: &Path,
     args: &[&str],
@@ -65,6 +85,7 @@ pub async fn run_brew_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    apply_brew_env(&mut cmd);
 
     let output = cmd.output().await.map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => BrewError::BrewNotFound,
@@ -123,6 +144,7 @@ pub async fn run_brew_streaming(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    apply_brew_env(&mut cmd);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -501,6 +523,16 @@ impl StderrRing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brew_env_disables_homebrew_analytics() {
+        // The privacy contract: every app-spawned brew command must carry
+        // HOMEBREW_NO_ANALYTICS=1 so we never trigger brew's InfluxDB ping.
+        assert!(
+            BREW_ENV.contains(&("HOMEBREW_NO_ANALYTICS", "1")),
+            "brew spawn env must disable Homebrew analytics"
+        );
+    }
 
     #[test]
     fn stderr_ring_keeps_lines_under_cap() {

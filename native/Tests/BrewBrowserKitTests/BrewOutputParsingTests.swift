@@ -266,3 +266,18 @@ struct DoctorCleanupParsingTests {
         #expect(BrewErrorPatterns.parseReclaimableBytes("") == nil)
     }
 }
+
+@Suite("BrewService.brewEnvironment")
+struct BrewEnvironmentTests {
+    // The privacy contract (parity with Rust `brew::exec::BREW_ENV`): every
+    // app-spawned brew command disables Homebrew's own InfluxDB analytics ping.
+    @Test func disablesHomebrewAnalytics() {
+        #expect(BrewService.brewEnvironment()["HOMEBREW_NO_ANALYTICS"] == "1")
+    }
+
+    @Test func keepsTerminalChatterSuppressed() {
+        let env = BrewService.brewEnvironment()
+        #expect(env["HOMEBREW_NO_COLOR"] == "1")
+        #expect(env["HOMEBREW_NO_ENV_HINTS"] == "1")
+    }
+}
