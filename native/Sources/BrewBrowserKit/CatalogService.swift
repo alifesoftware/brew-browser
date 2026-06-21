@@ -259,6 +259,19 @@ actor CatalogService {
             throw CatalogRefreshError.malformedResponse
         }
 
+        // Reject an empty response: formulae.brew.sh always returns thousands of
+        // entries. A zero count means the body parsed as a JSON array but is
+        // empty (a hostile mirror, a partial response, or a CDN error page that
+        // happens to be a JSON array). Persisting it would silently zero out the
+        // user's catalog on next launch, so throw before any write and let the
+        // caller keep the previous good catalog. Parity with the Tauri guard in
+        // `src-tauri/src/commands/catalog.rs` (refresh_catalog_inner). Safe on
+        // every OS: cask.json comes from the brew.sh API, not the OS-gated local
+        // brew layer, so it is non-empty regardless of platform.
+        if formulaArr.isEmpty || caskArr.isEmpty {
+            throw CatalogRefreshError.emptyResponse(formulaCount: formulaArr.count, caskCount: caskArr.count)
+        }
+
         let formulaGz = try Self.gzip(formulaRaw)
         let caskGz = try Self.gzip(caskRaw)
 
@@ -453,6 +466,7 @@ actor CatalogService {
         case noWritableDir
         case network(String)
         case malformedResponse
+        case emptyResponse(formulaCount: Int, caskCount: Int)
         case compression
 
         var errorDescription: String? {
@@ -460,6 +474,8 @@ actor CatalogService {
             case .noWritableDir: return "Couldn't locate a writable catalog directory."
             case .network(let m): return "Catalog refresh failed: \(m)"
             case .malformedResponse: return "brew.sh returned an unexpected catalog format."
+            case .emptyResponse(let f, let c):
+                return "brew.sh returned an empty catalog (formulae=\(f), casks=\(c))."
             case .compression: return "Couldn't compress the refreshed catalog."
             }
         }
