@@ -45,7 +45,7 @@ struct BrewBrowserApp: App {
         // Native Settings scene — opened by ⌘, the app menu, or the toolbar
         // gear (SettingsLink in ContentView). ⌘, is provided by SwiftUI.
         Settings {
-            SettingsView(updater: updater)
+            SettingsView(model: model, updater: updater)
         }
     }
 }

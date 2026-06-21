@@ -12,10 +12,14 @@
 
   import { onMount } from "svelte";
 
-  import { brewGetAnalytics, brewSetAnalytics } from "$lib/api";
+  import { brewGetAnalytics, brewSetAnalytics, brewAutoremove } from "$lib/api";
   import { ui } from "$lib/stores/ui.svelte";
+  import { activity } from "$lib/stores/activity.svelte";
   import { isBrewError, brewErrorMessage } from "$lib/types";
+  import type { BrewStreamEvent } from "$lib/types";
   import { toast } from "$lib/stores/toast.svelte";
+  import Button from "./Button.svelte";
+  import DestructiveConfirm from "./DestructiveConfirm.svelte";
 
   let analyticsEnabled = $state<boolean | null>(null);
   let analyticsLoading = $state(false);
@@ -55,6 +59,53 @@
     } finally {
       analyticsLoading = false;
     }
+  }
+
+  // ----- Advanced: autoremove (#47) -----
+
+  let autoremoveConfirmOpen = $state(false);
+  let autoremoveRunning = $state(false);
+
+  /** Run a streaming brew job into the Activity drawer (mirrors Dashboard's
+      `streamJob`): seed a temp job, open the drawer, then reconcile the real
+      job id on the first `started` event. */
+  async function streamJob(
+    label: string,
+    command: string,
+    run: (onEvent: (evt: BrewStreamEvent) => void) => Promise<{ success: boolean }>,
+  ): Promise<boolean> {
+    const tmpId = crypto.randomUUID();
+    activity.startJob(label, tmpId, command);
+    ui.openDrawer();
+    const result = await run((evt) => {
+      if (evt.kind === "started" && evt.jobId !== tmpId) {
+        const j = activity.jobs.find((j) => j.jobId === tmpId);
+        if (j) j.jobId = evt.jobId;
+      }
+      activity.handleEvent(evt);
+    });
+    return result.success;
+  }
+
+  async function runAutoremove() {
+    autoremoveConfirmOpen = false;
+    if (autoremoveRunning) return;
+    autoremoveRunning = true;
+    try {
+      await streamJob("Removing unused dependencies", "brew autoremove", brewAutoremove);
+    } catch (e) {
+      toast.error(
+        "brew autoremove failed to run",
+        isBrewError(e) ? brewErrorMessage(e) : String(e),
+      );
+    } finally {
+      autoremoveRunning = false;
+    }
+  }
+
+  function onAutoremoveClick() {
+    if (ui.confirmDestructive) autoremoveConfirmOpen = true;
+    else void runAutoremove();
   }
 
   onMount(() => {
@@ -112,7 +163,51 @@
       </label>
     </div>
   </section>
+
+  <section class="group">
+    <h3>Advanced</h3>
+    <p class="desc">Extra <code>brew</code> options for power users.</p>
+
+    <div class="row">
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={ui.greedyUpgrade}
+          onchange={(e) => ui.setGreedyUpgrade((e.currentTarget as HTMLInputElement).checked)}
+        />
+        <span>Greedy upgrades (include self-updating casks)</span>
+      </label>
+    </div>
+    <p class="desc subtle">
+      Adds <code>--greedy</code> to <code>brew upgrade</code> so casks that
+      update themselves (like Chrome) are upgraded too. Off by default — greedy
+      can churn apps that manage their own updates.
+    </p>
+
+    <div class="row">
+      <Button variant="secondary" disabled={autoremoveRunning} onclick={onAutoremoveClick}>
+        {autoremoveRunning ? "Removing…" : "Autoremove unused dependencies"}
+      </Button>
+    </div>
+    <p class="desc subtle">
+      Runs <code>brew autoremove</code> to uninstall formulae that were installed
+      only as dependencies and are no longer needed by anything.
+    </p>
+  </section>
 </div>
+
+<DestructiveConfirm
+  open={autoremoveConfirmOpen}
+  title="Remove unused dependencies?"
+  confirmLabel="Autoremove"
+  onConfirm={runAutoremove}
+  onCancel={() => (autoremoveConfirmOpen = false)}
+>
+  <p>
+    This runs <code>brew autoremove</code>, which uninstalls formulae that were
+    installed only as dependencies and are no longer required by anything else.
+  </p>
+</DestructiveConfirm>
 
 <style>
   .section { display: flex; flex-direction: column; gap: var(--space-5); max-width: 560px; }
@@ -139,6 +234,11 @@
     background: var(--color-surface-sunken);
     padding: 1px 4px;
     border-radius: var(--radius-sm);
+  }
+  .desc.subtle {
+    font-size: var(--text-caption);
+    color: var(--color-text-muted);
+    margin-top: calc(-1 * var(--space-1));
   }
   .row {
     display: flex;

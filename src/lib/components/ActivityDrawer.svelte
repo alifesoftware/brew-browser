@@ -14,11 +14,48 @@
   import { toast } from "$lib/stores/toast.svelte";
   import type { ActivityLine } from "$lib/types";
   import { openReportIssueFromJob } from "$lib/util/reportIssue";
+  import {
+    classifyRecovery,
+    runRecovery,
+    recoveryJobLabel,
+    type RecoveryOption,
+    type RecoveryKind,
+  } from "$lib/util/recovery";
 
   let consoleEl: HTMLDivElement | undefined = $state();
   let autoScroll = $state(true);
 
   let activeJob = $derived(activity.jobs.find((j) => j.jobId === activity.activeJobId) ?? activity.jobs[0]);
+
+  // In-app recovery (#13/#102/#100): when a failed job is a known-recoverable
+  // brew error (install hit "already an App", uninstall hit "required by…"),
+  // offer one-click retry buttons instead of sending the user to Terminal.
+  let recovery = $derived(activeJob ? classifyRecovery(activeJob) : null);
+  let recoveryBusy = $state(false);
+
+  async function runRecoveryChoice(opt: RecoveryOption, choice: RecoveryKind) {
+    if (recoveryBusy) return;
+    recoveryBusy = true;
+    const tmpId = crypto.randomUUID();
+    const flagged =
+      choice === "forceRemove"
+        ? `brew uninstall ${opt.kind === "cask" ? "--cask " : ""}${opt.name} --ignore-dependencies`
+        : `brew install ${opt.kind === "cask" ? "--cask " : ""}${opt.name}${choice === "adopt" ? " --adopt" : " --force"}`;
+    activity.startJob(recoveryJobLabel(opt, choice), tmpId, flagged);
+    try {
+      await runRecovery(opt, choice, (evt) => {
+        if (evt.kind === "started" && evt.jobId !== tmpId) {
+          const j = activity.jobs.find((j) => j.jobId === tmpId);
+          if (j) j.jobId = evt.jobId;
+        }
+        activity.handleEvent(evt);
+      });
+    } catch (e) {
+      toast.error("Couldn't run that action", String(e));
+    } finally {
+      recoveryBusy = false;
+    }
+  }
 
   // ─── Adaptive aria-live for high-volume install streams (security audit §N4).
   //
@@ -287,7 +324,25 @@
               <AlertTriangle size={16} />
               <h3>{failureTitle(activeJob.label)}</h3>
             </div>
-            {#if activeJob.friendlyMessage}
+            {#if recovery}
+              <!-- A recoverable brew failure (#13/#102/#100): offer a one-click
+                   retry with the right flag instead of pointing at Terminal. -->
+              <p>{recovery.reason}</p>
+              <div class="recovery-actions">
+                {#each recovery.choices as choice (choice.kind)}
+                  <button
+                    type="button"
+                    class="recovery-btn {choice.variant}"
+                    disabled={recoveryBusy}
+                    title={choice.hint}
+                    onclick={() => runRecoveryChoice(recovery!, choice.kind)}
+                  >
+                    {choice.label}
+                  </button>
+                {/each}
+              </div>
+              <p class="recovery-hint">{recovery.choices[0].hint}</p>
+            {:else if activeJob.friendlyMessage}
               <!-- A known brew failure with a curated friendly message. -->
               <p>{activeJob.friendlyMessage}</p>
             {:else if activeJob.exitCode != null}
@@ -510,5 +565,49 @@
   .report-btn:focus-visible {
     outline: 2px solid var(--color-focus, var(--color-brand, var(--color-accent)));
     outline-offset: 2px;
+  }
+
+  /* In-app recovery buttons (#13/#102/#100) — paired with the failure card. */
+  .recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+  .recovery-btn {
+    padding: 3px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    font-size: var(--text-body-sm);
+    font-weight: var(--fw-medium);
+    cursor: pointer;
+    transition: background-color var(--motion-duration-fast) var(--motion-ease-out),
+      opacity var(--motion-duration-fast) var(--motion-ease-out);
+  }
+  .recovery-btn:disabled { opacity: 0.55; cursor: wait; }
+  .recovery-btn.primary {
+    background: var(--color-brand);
+    color: var(--color-on-brand, white);
+    border-color: var(--color-brand);
+  }
+  .recovery-btn.primary:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--color-brand) 88%, black);
+  }
+  .recovery-btn.danger {
+    background: transparent;
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+  }
+  .recovery-btn.danger:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--color-danger) 12%, transparent);
+  }
+  .recovery-btn:focus-visible {
+    outline: 2px solid var(--color-focus, var(--color-brand, var(--color-accent)));
+    outline-offset: 2px;
+  }
+  .recovery-hint {
+    margin-top: var(--space-1);
+    font-size: var(--text-caption);
+    color: var(--color-text-muted);
   }
 </style>

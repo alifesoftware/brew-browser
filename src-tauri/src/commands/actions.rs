@@ -16,31 +16,81 @@ use crate::error::BrewError;
 use crate::state::AppState;
 use crate::types::{BrewStreamEvent, JobResult, PackageKind};
 
+// ---------- Pure argv builders ----------
+//
+// The flag logic for each write command lives in these pure functions so it
+// is unit-testable without spawning brew or wiring a Channel/AppState. The
+// commands below call them, then derive the user-facing display string with
+// `display_for`.
+
+fn kind_flag(kind: PackageKind) -> &'static str {
+    match kind {
+        PackageKind::Formula => "--formula",
+        PackageKind::Cask => "--cask",
+    }
+}
+
+/// `brew install <kind> <name> [--adopt] [--force]`. `--adopt` is cask-only:
+/// it takes over a matching app already present on disk instead of erroring
+/// with "It seems there is already an App at…" — the in-app fix for #13/#102.
+/// `--force` overwrites instead of adopting (the heavier hammer).
+fn install_args(name: &str, kind: PackageKind, force: bool, adopt: bool) -> Vec<String> {
+    let mut args = vec!["install".to_string(), kind_flag(kind).to_string(), name.to_string()];
+    if adopt && matches!(kind, PackageKind::Cask) {
+        args.push("--adopt".to_string());
+    }
+    if force {
+        args.push("--force".to_string());
+    }
+    args
+}
+
+/// `brew uninstall <kind> <name> [--zap] [--ignore-dependencies]`. `--zap` is
+/// cask-only (removes leftover files). `--ignore-dependencies` forces removal
+/// even when another installed package still requires it — the in-app escape
+/// for "Refusing to uninstall … because it is required by…" (#100).
+fn uninstall_args(name: &str, kind: PackageKind, zap: bool, ignore_dependencies: bool) -> Vec<String> {
+    let mut args = vec!["uninstall".to_string(), kind_flag(kind).to_string(), name.to_string()];
+    if zap && matches!(kind, PackageKind::Cask) {
+        args.push("--zap".to_string());
+    }
+    if ignore_dependencies {
+        args.push("--ignore-dependencies".to_string());
+    }
+    args
+}
+
+/// `brew upgrade [names...] [--greedy]`. Empty `names` upgrades everything.
+/// `--greedy` also upgrades casks that self-update (`auto_updates` / `version
+/// :latest`), which brew otherwise skips — the option requested in #47/#31.
+fn upgrade_args(names: &[String], greedy: bool) -> Vec<String> {
+    let mut args = vec!["upgrade".to_string()];
+    args.extend(names.iter().cloned());
+    if greedy {
+        args.push("--greedy".to_string());
+    }
+    args
+}
+
+/// User-facing command string for the Activity log, derived from the argv.
+fn display_for(args: &[String]) -> String {
+    format!("brew {}", args.join(" "))
+}
+
 #[tauri::command]
 pub async fn brew_install(
     name: String,
     kind: PackageKind,
     force: bool,
+    adopt: bool,
     on_event: Channel<BrewStreamEvent>,
     state: State<'_, AppState>,
 ) -> Result<JobResult, BrewError> {
     validate_package_name(&name)?;
     let path = state.require_brew_path().await?;
 
-    let kind_flag = match kind {
-        PackageKind::Formula => "--formula",
-        PackageKind::Cask => "--cask",
-    };
-    let mut args = vec!["install".to_string(), kind_flag.to_string(), name.clone()];
-    if force {
-        args.push("--force".to_string());
-    }
-    let display = format!(
-        "brew install {} {}{}",
-        kind_flag,
-        name,
-        if force { " --force" } else { "" }
-    );
+    let args = install_args(&name, kind, force, adopt);
+    let display = display_for(&args);
     let jobs = state.jobs.clone();
     let lock = state.brew_write_lock.clone();
 
@@ -58,26 +108,15 @@ pub async fn brew_uninstall(
     name: String,
     kind: PackageKind,
     zap: bool,
+    ignore_dependencies: bool,
     on_event: Channel<BrewStreamEvent>,
     state: State<'_, AppState>,
 ) -> Result<JobResult, BrewError> {
     validate_package_name(&name)?;
     let path = state.require_brew_path().await?;
 
-    let kind_flag = match kind {
-        PackageKind::Formula => "--formula",
-        PackageKind::Cask => "--cask",
-    };
-    let mut args = vec!["uninstall".to_string(), kind_flag.to_string(), name.clone()];
-    if zap && matches!(kind, PackageKind::Cask) {
-        args.push("--zap".to_string());
-    }
-    let display = format!(
-        "brew uninstall {} {}{}",
-        kind_flag,
-        name,
-        if zap { " --zap" } else { "" }
-    );
+    let args = uninstall_args(&name, kind, zap, ignore_dependencies);
+    let display = display_for(&args);
     let jobs = state.jobs.clone();
     let lock = state.brew_write_lock.clone();
 
@@ -93,6 +132,7 @@ pub async fn brew_uninstall(
 #[tauri::command]
 pub async fn brew_upgrade(
     name: Option<String>,
+    greedy: bool,
     on_event: Channel<BrewStreamEvent>,
     state: State<'_, AppState>,
 ) -> Result<JobResult, BrewError> {
@@ -101,14 +141,9 @@ pub async fn brew_upgrade(
     }
     let path = state.require_brew_path().await?;
 
-    let mut args = vec!["upgrade".to_string()];
-    if let Some(n) = name.as_ref() {
-        args.push(n.clone());
-    }
-    let display = match name.as_ref() {
-        Some(n) => format!("brew upgrade {}", n),
-        None => "brew upgrade".to_string(),
-    };
+    let names: Vec<String> = name.into_iter().collect();
+    let args = upgrade_args(&names, greedy);
+    let display = display_for(&args);
     let jobs = state.jobs.clone();
     let lock = state.brew_write_lock.clone();
 
@@ -132,6 +167,7 @@ pub async fn brew_upgrade(
 #[tauri::command]
 pub async fn brew_upgrade_many(
     names: Vec<String>,
+    greedy: bool,
     on_event: Channel<BrewStreamEvent>,
     state: State<'_, AppState>,
 ) -> Result<JobResult, BrewError> {
@@ -147,9 +183,8 @@ pub async fn brew_upgrade_many(
     }
     let path = state.require_brew_path().await?;
 
-    let mut args = vec!["upgrade".to_string()];
-    args.extend(names.iter().cloned());
-    let display = format!("brew upgrade {}", names.join(" "));
+    let args = upgrade_args(&names, greedy);
+    let display = display_for(&args);
     let jobs = state.jobs.clone();
     let lock = state.brew_write_lock.clone();
 
@@ -250,6 +285,31 @@ pub async fn brew_cleanup(
     result
 }
 
+/// `brew autoremove` — remove formulae that were installed only as
+/// dependencies and are no longer needed by anything (issue #47). Streams like
+/// the other write commands and is confirm-gated in the UI. Changes the install
+/// set, so caches are invalidated on success.
+#[tauri::command]
+pub async fn brew_autoremove(
+    on_event: Channel<BrewStreamEvent>,
+    state: State<'_, AppState>,
+) -> Result<JobResult, BrewError> {
+    let path = state.require_brew_path().await?;
+
+    let args = vec!["autoremove".to_string()];
+    let display = "brew autoremove".to_string();
+    let jobs = state.jobs.clone();
+    let lock = state.brew_write_lock.clone();
+
+    let _guard = lock.lock_owned().await;
+    let result = run_brew_streaming(&path, args, display, on_event, jobs).await;
+
+    if result.is_ok() {
+        state.invalidate_caches().await;
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn cancel_job(job_id: Uuid, state: State<'_, AppState>) -> Result<(), BrewError> {
     let mut map = state.jobs.lock().await;
@@ -261,4 +321,89 @@ pub async fn cancel_job(job_id: Uuid, state: State<'_, AppState>) -> Result<(), 
         let _ = tx.send(());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn svec(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn install_adopt_is_cask_only() {
+        assert_eq!(
+            install_args("cursor", PackageKind::Cask, false, true),
+            svec(&["install", "--cask", "cursor", "--adopt"])
+        );
+        // Formulae have no on-disk app to adopt → flag is dropped.
+        assert_eq!(
+            install_args("wget", PackageKind::Formula, false, true),
+            svec(&["install", "--formula", "wget"])
+        );
+    }
+
+    #[test]
+    fn install_adopt_and_force_order() {
+        // --adopt before --force; both present when both requested.
+        assert_eq!(
+            install_args("cursor", PackageKind::Cask, true, true),
+            svec(&["install", "--cask", "cursor", "--adopt", "--force"])
+        );
+    }
+
+    #[test]
+    fn install_plain_unchanged() {
+        assert_eq!(
+            install_args("cursor", PackageKind::Cask, false, false),
+            svec(&["install", "--cask", "cursor"])
+        );
+    }
+
+    #[test]
+    fn uninstall_ignore_dependencies_force_remove() {
+        assert_eq!(
+            uninstall_args("gstreamer-runtime", PackageKind::Cask, false, true),
+            svec(&["uninstall", "--cask", "gstreamer-runtime", "--ignore-dependencies"])
+        );
+    }
+
+    #[test]
+    fn uninstall_zap_is_cask_only() {
+        // --zap dropped for a formula; --ignore-dependencies still applies.
+        assert_eq!(
+            uninstall_args("foo", PackageKind::Formula, true, true),
+            svec(&["uninstall", "--formula", "foo", "--ignore-dependencies"])
+        );
+    }
+
+    #[test]
+    fn upgrade_all_greedy() {
+        assert_eq!(upgrade_args(&[], true), svec(&["upgrade", "--greedy"]));
+    }
+
+    #[test]
+    fn upgrade_named_without_greedy() {
+        assert_eq!(
+            upgrade_args(&["wget".to_string()], false),
+            svec(&["upgrade", "wget"])
+        );
+    }
+
+    #[test]
+    fn upgrade_many_greedy() {
+        assert_eq!(
+            upgrade_args(&["a".to_string(), "b".to_string()], true),
+            svec(&["upgrade", "a", "b", "--greedy"])
+        );
+    }
+
+    #[test]
+    fn display_renders_brew_prefix() {
+        assert_eq!(
+            display_for(&install_args("cursor", PackageKind::Cask, false, true)),
+            "brew install --cask cursor --adopt"
+        );
+    }
 }

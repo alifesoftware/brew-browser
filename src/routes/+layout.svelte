@@ -19,6 +19,7 @@
     ui.loadDefaultSectionFromStorage();
     ui.loadVibrancyMaterialFromStorage();
     ui.loadConfirmDestructiveFromStorage();
+    ui.loadGreedyUpgradeFromStorage();
     ui.loadActivitySettingsFromStorage();
     ui.loadSidebarCollapsedFromStorage();
     activity.hydrate();

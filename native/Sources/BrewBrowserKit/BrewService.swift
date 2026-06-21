@@ -112,6 +112,40 @@ private actor ProcessRegistry {
     func cancel(_ id: UUID) { live[id]?.terminate() }
 }
 
+/// Pure builders for the brew argv of each write action, the native mirror of
+/// the Tauri `commands::actions` arg-builders (parity charter: same flag logic,
+/// same data contract). Free of I/O so they're unit-testable without spawning
+/// brew. The `--cask`/no-`--formula` convention matches the existing native
+/// commands (brew defaults to a formula); the new flags are the additions.
+enum BrewArgs {
+    /// `brew install [--cask] <name> [--adopt] [--force]`. `--adopt` is cask-only
+    /// and takes over a matching app already on disk instead of erroring with
+    /// "It seems there is already an App at…" (#13/#102). `--force` overwrites.
+    static func install(_ name: String, kind: InstalledPackage.Kind,
+                        force: Bool = false, adopt: Bool = false) -> [String] {
+        var args = ["install"]
+        if kind == .cask { args.append("--cask") }
+        args.append(name)
+        if adopt && kind == .cask { args.append("--adopt") }
+        if force { args.append("--force") }
+        return args
+    }
+
+    /// `brew uninstall [--cask] <name> [--zap] [--ignore-dependencies]`.
+    /// `--ignore-dependencies` forces removal even when another installed
+    /// package still requires it — the in-app escape for "Refusing to
+    /// uninstall … because it is required by…" (#100).
+    static func uninstall(_ name: String, kind: InstalledPackage.Kind,
+                          zap: Bool = false, ignoreDependencies: Bool = false) -> [String] {
+        var args = ["uninstall"]
+        if kind == .cask { args.append("--cask") }
+        args.append(name)
+        if zap && kind == .cask { args.append("--zap") }
+        if ignoreDependencies { args.append("--ignore-dependencies") }
+        return args
+    }
+}
+
 struct BrewService: Sendable {
     private let registry = ProcessRegistry()
 

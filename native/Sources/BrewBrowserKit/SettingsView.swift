@@ -24,7 +24,14 @@ public struct SettingsView: View {
     /// tab's "Check now" / auto-check controls drive the shared instance (Bundle C).
     private let updater: UpdaterController
 
-    public init(updater: UpdaterController) { self.updater = updater }
+    /// The shared app model, passed in so the Brew tab's Autoremove action can
+    /// stream a job into Activity (parity with the Tauri Settings → Brew).
+    private let model: AppModel
+
+    public init(model: AppModel, updater: UpdaterController) {
+        self.model = model
+        self.updater = updater
+    }
 
     public var body: some View {
         TabView(selection: $selected) {
@@ -34,7 +41,7 @@ public struct SettingsView: View {
                 .tabItem { Label("Network", systemImage: "globe") }.tag(SettingsTab.network.rawValue)
             GitHubSettings()
                 .tabItem { Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right") }.tag(SettingsTab.github.rawValue)
-            BrewSettings()
+            BrewSettings(model: model)
                 .tabItem { Label("Brew", systemImage: "mug") }.tag(SettingsTab.brew.rawValue)
             UpdatesSettings(updater: updater)
                 .tabItem { Label("Updates", systemImage: "arrow.down.circle") }.tag(SettingsTab.updates.rawValue)
@@ -243,10 +250,12 @@ private struct GitHubSettings: View {
 // MARK: - Brew
 
 private struct BrewSettings: View {
+    @Bindable var model: AppModel
     @State private var prefs = LocalPrefs.shared
     @State private var brew = BrewService()
     @State private var analytics: Bool?
     @State private var analyticsBusy = false
+    @State private var confirmAutoremove = false
 
     var body: some View {
         Form {
@@ -272,10 +281,29 @@ private struct BrewSettings: View {
                 Text("Destructive actions (Uninstall, Zap, Delete Brewfile) ask before proceeding.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            SwiftUI.Section("Advanced") {
+                Toggle("Greedy upgrades (include self-updating casks)", isOn: $prefs.greedyUpgrade)
+                Text("Adds `--greedy` to `brew upgrade` so casks that update themselves (like Chrome) are upgraded too. Off by default — greedy can churn apps that manage their own updates.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Button("Autoremove unused dependencies") {
+                    if prefs.confirmDestructive { confirmAutoremove = true }
+                    else { Task { await model.autoremove() } }
+                }
+                Text("Runs `brew autoremove` to uninstall formulae that were installed only as dependencies and are no longer needed by anything.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding(20)
         .task { analytics = await brew.getAnalytics() }
+        .confirmationDialog("Remove unused dependencies?", isPresented: $confirmAutoremove, titleVisibility: .visible) {
+            Button("Autoremove", role: .destructive) { Task { await model.autoremove() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This runs `brew autoremove`, which uninstalls formulae that were installed only as dependencies and are no longer required by anything else.")
+        }
     }
 }
 

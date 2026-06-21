@@ -271,7 +271,7 @@
           if (j) j.jobId = evt.jobId;
         }
         activity.handleEvent(evt);
-      });
+      }, ui.greedyUpgrade);
       if (result.success) {
         toast.success(`Upgraded ${name}`);
         // v0.5.0 — old version gone, new version installed. Drop the old

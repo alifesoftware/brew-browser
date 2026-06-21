@@ -17,6 +17,7 @@ const DETAIL_PANE_WIDTH_KEY = "brew-browser:detail-pane-width";
 const DEFAULT_SECTION_KEY = "brew-browser:default-section";
 const VIBRANCY_MATERIAL_KEY = "brew-browser:vibrancy-material";
 const CONFIRM_DESTRUCTIVE_KEY = "brew-browser:confirm-destructive";
+const GREEDY_UPGRADE_KEY = "brew-browser:greedy-upgrade";
 const ACTIVITY_MAX_JOBS_KEY = "brew-browser:activity:max-jobs";
 const ACTIVITY_MAX_LINES_KEY = "brew-browser:activity:max-lines";
 const SIDEBAR_COLLAPSED_KEY = "brew-browser:sidebar-collapsed";
@@ -115,6 +116,12 @@ class UiStore {
       a confirm dialog. Defaults true; turning it off is a "trust me" mode
       for power users. */
   confirmDestructive: boolean = $state(true);
+
+  /** When true, `brew upgrade` runs with `--greedy` so casks that self-update
+      (`auto_updates` / `version :latest`) are upgraded too (issues #47/#31).
+      Off by default — greedy can churn apps that manage their own updates.
+      Persisted to localStorage; applied by every upgrade path. */
+  greedyUpgrade: boolean = $state(false);
 
   /** Activity persistence caps (Phase 12b). These are the future limits
       for the `activity` store's localStorage mirror. Existing retained
@@ -238,6 +245,19 @@ class UiStore {
       const v = localStorage.getItem(CONFIRM_DESTRUCTIVE_KEY);
       if (v === "0") this.confirmDestructive = false;
       else if (v === "1") this.confirmDestructive = true;
+    } catch { /* ignore */ }
+  }
+
+  setGreedyUpgrade(v: boolean) {
+    this.greedyUpgrade = v;
+    try { localStorage.setItem(GREEDY_UPGRADE_KEY, v ? "1" : "0"); } catch { /* ignore */ }
+  }
+
+  loadGreedyUpgradeFromStorage() {
+    try {
+      const v = localStorage.getItem(GREEDY_UPGRADE_KEY);
+      if (v === "1") this.greedyUpgrade = true;
+      else if (v === "0") this.greedyUpgrade = false;
     } catch { /* ignore */ }
   }
 

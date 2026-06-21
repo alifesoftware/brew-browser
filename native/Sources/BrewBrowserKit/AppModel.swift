@@ -1809,20 +1809,22 @@ public final class AppModel {
 
     // MARK: - Detail actions
 
-    func upgradeDetail() async {
+    func upgradeDetail(greedy: Bool = false) async {
         guard let pkg = detailPackage else { return }
         var args = ["upgrade"]
         if pkg.kind == .cask { args.append("--cask") }
         args.append(pkg.name)
+        if greedy { args.append("--greedy") }
         let ok = await startJob("Upgrading \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
         if ok, let pkg = detailPackage { await loadDetail(pkg) }
     }
 
-    func uninstallDetail() async {
+    /// Uninstall the detail package. `ignoreDependencies` adds
+    /// `--ignore-dependencies` to force removal when another installed package
+    /// still requires it ("Force remove", #100).
+    func uninstallDetail(ignoreDependencies: Bool = false) async {
         guard let pkg = detailPackage else { return }
-        var args = ["uninstall"]
-        if pkg.kind == .cask { args.append("--cask") }
-        args.append(pkg.name)
+        let args = BrewArgs.uninstall(pkg.name, kind: pkg.kind, ignoreDependencies: ignoreDependencies)
         let ok = await startJob("Uninstalling \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
         if ok { closeDetail() }
     }
@@ -1831,11 +1833,12 @@ public final class AppModel {
     /// detail afterward so the footer flips Install → Uninstall + the meta table
     /// shows the now-installed version. Output streams into the Activity drawer;
     /// on failure the job shows `failed` with brew's actual error lines.
-    func installDetail() async {
+    /// Install the detail package. `adopt` adds `--adopt` (cask-only) to take
+    /// over a matching app already on disk instead of erroring "already an
+    /// App" (#13/#102); `force` overwrites it.
+    func installDetail(force: Bool = false, adopt: Bool = false) async {
         guard let pkg = detailPackage else { return }
-        var args = ["install"]
-        if pkg.kind == .cask { args.append("--cask") }
-        args.append(pkg.name)
+        let args = BrewArgs.install(pkg.name, kind: pkg.kind, force: force, adopt: adopt)
         let ok = await startJob("Installing \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
         if ok, let pkg = detailPackage { await loadDetail(pkg) }
     }
@@ -1845,9 +1848,11 @@ public final class AppModel {
     /// `brew upgrade` — upgrade every outdated formula and cask, as a streaming
     /// Activity job. Mirrors Tauri's Dashboard "Upgrade all". `startJob` calls
     /// `refresh()` on completion, so the outdated count updates itself.
-    func upgradeAll() async {
+    func upgradeAll(greedy: Bool = false) async {
         guard outdatedCount > 0 else { return }
-        await startJob("Upgrading all packages", args: ["upgrade"], startedAt: Date().timeIntervalSince1970)
+        var args = ["upgrade"]
+        if greedy { args.append("--greedy") }
+        await startJob("Upgrading all packages", args: args, startedAt: Date().timeIntervalSince1970)
     }
 
     /// Curated upgrade — run ONE `brew upgrade <name1> <name2> …` for the
@@ -1855,10 +1860,39 @@ public final class AppModel {
     /// Mirrors the Tauri `brew_upgrade_many` flow (`UpgradeModal.svelte`): a
     /// single streaming Activity job rather than N sequential ones. `startJob`
     /// calls `refresh()` on completion, so the outdated count self-updates.
-    func upgradeMany(_ names: [String]) async {
+    func upgradeMany(_ names: [String], greedy: Bool = false) async {
         guard !names.isEmpty else { return }
         let label = names.count == 1 ? "Upgrading \(names[0])" : "Upgrading \(names.count) packages"
-        await startJob(label, args: ["upgrade"] + names, startedAt: Date().timeIntervalSince1970)
+        var args = ["upgrade"] + names
+        if greedy { args.append("--greedy") }
+        await startJob(label, args: args, startedAt: Date().timeIntervalSince1970)
+    }
+
+    /// `brew autoremove` — remove formulae installed only as now-unneeded
+    /// dependencies (#47). Confirm-gated in the UI; streams into Activity.
+    /// Mirrors Tauri `brew_autoremove`; `startJob` refreshes on completion.
+    func autoremove() async {
+        await startJob("Removing unused dependencies", args: ["autoremove"], startedAt: Date().timeIntervalSince1970)
+    }
+
+    /// Re-run a failed command with the flag a recovery choice implies
+    /// (#13/#102/#100). Streams a fresh Activity job, exactly like the first
+    /// attempt. Mirrors the Tauri `runRecovery` in `util/recovery.ts`.
+    func runRecovery(_ option: BrewRecovery.Option, choice: BrewRecovery.Choice) async {
+        let args: [String]
+        let label: String
+        switch choice {
+        case .adopt:
+            args = BrewArgs.install(option.name, kind: option.kind, adopt: true)
+            label = "Adopting \(option.name)"
+        case .overwrite:
+            args = BrewArgs.install(option.name, kind: option.kind, force: true)
+            label = "Reinstalling \(option.name)"
+        case .forceRemove:
+            args = BrewArgs.uninstall(option.name, kind: option.kind, ignoreDependencies: true)
+            label = "Force-removing \(option.name)"
+        }
+        await startJob(label, args: args, startedAt: Date().timeIntervalSince1970)
     }
 
     // MARK: - Snapshots (Brewfile)
