@@ -180,6 +180,7 @@ pub fn run() {
             brew_update,
             brew_doctor_stream,
             brew_cleanup,
+            brew_autoremove,
             cancel_job,
             brewfile_dump,
             brewfile_install,

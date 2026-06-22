@@ -160,7 +160,32 @@ struct ActivityDrawer: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(AppModel.failureNoticeTitle(for: job.label))
                         .font(.callout.weight(.semibold))
-                    if let friendly = job.friendlyFailureMessage {
+                    if let recovery = BrewRecovery.classify(job) {
+                        // A recoverable brew failure (#13/#102/#100): offer a
+                        // one-click retry with the right flag instead of Terminal.
+                        Text(recovery.reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            ForEach(recovery.choices) { spec in
+                                Button(spec.label) {
+                                    Task { await model.runRecovery(recovery, choice: spec.choice) }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(spec.isDanger ? .red : .accentColor)
+                                .help(spec.hint)
+                            }
+                        }
+                        .padding(.top, 2)
+                        if let hint = recovery.choices.first?.hint {
+                            Text(hint)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else if let friendly = job.friendlyFailureMessage {
                         // Known brew failure with a curated friendly message.
                         Text(friendly)
                             .font(.caption)

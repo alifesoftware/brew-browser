@@ -73,6 +73,7 @@ final class LocalPrefs {
         static let theme = "brew-browser.theme"
         static let defaultSection = "brew-browser.default-section"
         static let confirmDestructive = "brew-browser.confirm-destructive"
+        static let greedyUpgrade = "brew-browser.greedy-upgrade"
         static let activityMaxJobs = "brew-browser.activity.max-jobs"
         static let activityMaxLines = "brew-browser.activity.max-lines"
         static let sidebarCollapsed = "brew-browser.sidebar-collapsed"
@@ -89,6 +90,9 @@ final class LocalPrefs {
     private static let defaultTheme: AppTheme = .system
     private static let defaultLandingSection: LandingSection = .dashboard
     private static let defaultConfirmDestructive = true
+    /// Greedy upgrades (include self-updating casks) — off by default, mirrors
+    /// the Tauri `ui.greedyUpgrade` (ui.svelte.ts). Issues #47/#31.
+    private static let defaultGreedyUpgrade = false
     private static let defaultSidebarCollapsed = false
     /// Native-only: post a macOS notification when a brew task finishes while
     /// the app isn't frontmost. Opt-in (off) so we never prompt unprompted.
@@ -116,6 +120,12 @@ final class LocalPrefs {
     /// Whether destructive actions require a confirm dialog (ui.svelte.ts:117).
     var confirmDestructive: Bool {
         didSet { defaults.set(confirmDestructive, forKey: Key.confirmDestructive) }
+    }
+
+    /// Whether `brew upgrade` runs with `--greedy` so self-updating casks are
+    /// included (#47/#31). Off by default. Mirrors Tauri `ui.greedyUpgrade`.
+    var greedyUpgrade: Bool {
+        didSet { defaults.set(greedyUpgrade, forKey: Key.greedyUpgrade) }
     }
 
     /// Max retained Activity jobs; clamped to 1...1000 (ui.svelte.ts:244-248).
@@ -215,6 +225,13 @@ final class LocalPrefs {
             self.confirmDestructive = defaults.bool(forKey: Key.confirmDestructive)
         } else {
             self.confirmDestructive = Self.defaultConfirmDestructive
+        }
+
+        // greedyUpgrade — absent key defaults to false.
+        if defaults.object(forKey: Key.greedyUpgrade) != nil {
+            self.greedyUpgrade = defaults.bool(forKey: Key.greedyUpgrade)
+        } else {
+            self.greedyUpgrade = Self.defaultGreedyUpgrade
         }
 
         // activityMaxJobs — clamp on read.

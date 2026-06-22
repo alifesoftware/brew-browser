@@ -70,7 +70,7 @@ struct UpgradeSheet: View {
                 Button {
                     let names = rows.filter { isChecked($0) }.map(\.name)
                     onClose()
-                    Task { await model.upgradeMany(names) }
+                    Task { await model.upgradeMany(names, greedy: LocalPrefs.shared.greedyUpgrade) }
                 } label: {
                     Label(
                         selectedCount == 0

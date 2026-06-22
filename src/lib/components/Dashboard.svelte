@@ -579,7 +579,7 @@
           if (j) j.jobId = evt.jobId;
         }
         activity.handleEvent(evt);
-      });
+      }, ui.greedyUpgrade);
       if (result.success) {
         toast.success(`Upgraded ${counts.outdated} packages`);
         packages.load(true);

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import BrewBrowserKit
 
@@ -279,5 +280,90 @@ struct BrewEnvironmentTests {
         let env = BrewService.brewEnvironment()
         #expect(env["HOMEBREW_NO_COLOR"] == "1")
         #expect(env["HOMEBREW_NO_ENV_HINTS"] == "1")
+    }
+}
+
+@Suite("BrewArgs")
+struct BrewArgsTests {
+    // Parity with the Rust `commands::actions::tests` arg-builders.
+
+    @Test func installAdoptIsCaskOnly() {
+        #expect(BrewArgs.install("cursor", kind: .cask, adopt: true)
+            == ["install", "--cask", "cursor", "--adopt"])
+        // Formulae have no on-disk app to adopt → flag dropped.
+        #expect(BrewArgs.install("wget", kind: .formula, adopt: true)
+            == ["install", "wget"])
+    }
+
+    @Test func installAdoptAndForceOrder() {
+        #expect(BrewArgs.install("cursor", kind: .cask, force: true, adopt: true)
+            == ["install", "--cask", "cursor", "--adopt", "--force"])
+    }
+
+    @Test func installPlainUnchanged() {
+        #expect(BrewArgs.install("cursor", kind: .cask) == ["install", "--cask", "cursor"])
+    }
+
+    @Test func uninstallIgnoreDependenciesForceRemove() {
+        #expect(BrewArgs.uninstall("gstreamer-runtime", kind: .cask, ignoreDependencies: true)
+            == ["uninstall", "--cask", "gstreamer-runtime", "--ignore-dependencies"])
+    }
+
+    @Test func uninstallZapIsCaskOnly() {
+        // --zap dropped for a formula; --ignore-dependencies still applies.
+        #expect(BrewArgs.uninstall("foo", kind: .formula, zap: true, ignoreDependencies: true)
+            == ["uninstall", "foo", "--ignore-dependencies"])
+    }
+}
+
+@Suite("BrewRecovery")
+struct BrewRecoveryTests {
+    // Parity with the Tauri `util/recovery.test.ts`.
+
+    private func failed(_ command: String, _ stderr: [String],
+                        status: ActivityJob.JobStatus = .failed,
+                        exitCode: Int32? = 1) -> ActivityJob {
+        ActivityJob(
+            id: UUID(), label: "x", command: command, startedAt: 0,
+            status: status,
+            lines: stderr.map { ActivityLine(stream: .stderr, text: $0) },
+            exitCode: exitCode)
+    }
+
+    @Test func caskAlreadyExistsOffersAdoptAndOverwrite() {
+        let r = BrewRecovery.classify(failed("brew install --cask google-chrome",
+            ["Error: It seems there is already an App at '/Applications/Google Chrome.app'."]))
+        #expect(r != nil)
+        #expect(r?.action == .install)
+        #expect(r?.kind == .cask)
+        #expect(r?.name == "google-chrome")
+        #expect(r?.choices.map(\.choice) == [.adopt, .overwrite])
+    }
+
+    @Test func formulaAlreadyExistsOffersOnlyOverwrite() {
+        let r = BrewRecovery.classify(failed("brew install --formula foo",
+            ["Error: It seems there is already a Binary at '/opt/homebrew/bin/foo'."]))
+        #expect(r?.kind == .formula)
+        #expect(r?.choices.map(\.choice) == [.overwrite])
+    }
+
+    @Test func uninstallRequiredByOffersForceRemove() {
+        let r = BrewRecovery.classify(failed("brew uninstall --cask gstreamer-runtime",
+            ["Error: Refusing to uninstall gstreamer-runtime",
+             "because it is required by wine-stable, which is currently installed."]))
+        #expect(r?.action == .uninstall)
+        #expect(r?.name == "gstreamer-runtime")
+        #expect(r?.choices.map(\.choice) == [.forceRemove])
+    }
+
+    @Test func nonRecoverableCasesReturnNil() {
+        // Succeeded.
+        #expect(BrewRecovery.classify(failed("brew install --cask x", ["whatever"], status: .succeeded)) == nil)
+        // No exit code = our spawn failure.
+        #expect(BrewRecovery.classify(failed("brew install --cask x", ["boom"], exitCode: nil)) == nil)
+        // Unrelated upgrade failure.
+        #expect(BrewRecovery.classify(failed("brew upgrade", ["Error: other"])) == nil)
+        // Install failure that isn't an existing-app conflict.
+        #expect(BrewRecovery.classify(failed("brew install --cask x", ["Error: Download failed: 404"])) == nil)
     }
 }

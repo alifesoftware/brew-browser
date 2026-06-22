@@ -756,7 +756,7 @@ struct PackageDetailView: View {
                 if isInstalled {
                     if info?.isOutdated == true {
                         Button {
-                            Task { await model.upgradeDetail() }
+                            Task { await model.upgradeDetail(greedy: LocalPrefs.shared.greedyUpgrade) }
                         } label: { Label("Upgrade", systemImage: "arrow.up.circle") }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.actionRunning)

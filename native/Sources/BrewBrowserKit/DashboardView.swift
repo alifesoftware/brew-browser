@@ -210,7 +210,7 @@ struct UpdatesCard: View {
                     Button("Choose…") { showUpgradeSheet = true }
                         .controlSize(.small)
                     Button {
-                        Task { await model.upgradeAll() }
+                        Task { await model.upgradeAll(greedy: LocalPrefs.shared.greedyUpgrade) }
                     } label: {
                         Label("Upgrade all (\(model.outdatedCount))", systemImage: "arrow.up.circle")
                     }

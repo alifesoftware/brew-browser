@@ -163,11 +163,13 @@ export function brewInstall(
   kind: PackageKind,
   force = false,
   onEvent: (evt: BrewStreamEvent) => void,
+  adopt = false,
 ): Promise<JobResult> {
   return invoke<JobResult>("brew_install", {
     name,
     kind,
     force,
+    adopt,
     onEvent: makeChannel(onEvent),
   });
 }
@@ -177,11 +179,13 @@ export function brewUninstall(
   kind: PackageKind,
   zap: boolean,
   onEvent: (evt: BrewStreamEvent) => void,
+  ignoreDependencies = false,
 ): Promise<JobResult> {
   return invoke<JobResult>("brew_uninstall", {
     name,
     kind,
     zap,
+    ignoreDependencies,
     onEvent: makeChannel(onEvent),
   });
 }
@@ -189,9 +193,11 @@ export function brewUninstall(
 export function brewUpgrade(
   name: string | null,
   onEvent: (evt: BrewStreamEvent) => void,
+  greedy = false,
 ): Promise<JobResult> {
   return invoke<JobResult>("brew_upgrade", {
     name,
+    greedy,
     onEvent: makeChannel(onEvent),
   });
 }
@@ -207,9 +213,24 @@ export function brewUpgrade(
 export function brewUpgradeMany(
   names: string[],
   onEvent: (evt: BrewStreamEvent) => void,
+  greedy = false,
 ): Promise<JobResult> {
   return invoke<JobResult>("brew_upgrade_many", {
     names,
+    greedy,
+    onEvent: makeChannel(onEvent),
+  });
+}
+
+/**
+ * Issue #47 — `brew autoremove`: remove formulae that were pulled in only as
+ * dependencies and are no longer needed. Confirm-gated in the UI; streams like
+ * the other write commands.
+ */
+export function brewAutoremove(
+  onEvent: (evt: BrewStreamEvent) => void,
+): Promise<JobResult> {
+  return invoke<JobResult>("brew_autoremove", {
     onEvent: makeChannel(onEvent),
   });
 }
