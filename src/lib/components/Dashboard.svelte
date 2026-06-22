@@ -57,14 +57,16 @@
     if (diskLoading) return;
     diskLoading = true;
     diskError = null;
+    if (force) {
+      try { await diskUsageClearCache(); } catch { /* best-effort */ }
+    }
+    // Refresh the reclaimable estimate INDEPENDENTLY of the (slower, fallible)
+    // disk re-measure: a disk-probe error must not leave a stale "frees ~X"
+    // hint after a cleanup. `cleanupPreview` re-runs `brew cleanup -n`, which
+    // reports ~nothing once the cache has actually been cleared.
+    brewCleanupPreview().then((p) => { cleanupPreview = p; }).catch(() => { cleanupPreview = null; });
     try {
-      if (force) {
-        try { await diskUsageClearCache(); } catch { /* best-effort */ }
-      }
       disk = await diskUsage();
-      // Best-effort reclaimable estimate for the cleanup hint; never blocks the
-      // disk report, and a failure just hides the hint.
-      brewCleanupPreview().then((p) => { cleanupPreview = p; }).catch(() => { cleanupPreview = null; });
     } catch (e) {
       diskError = `Disk probe failed: ${isBrewError(e) ? brewErrorMessage(e) : String(e)}`;
     } finally {
@@ -112,15 +114,16 @@
     cleanupConfirmOpen = false;
     cleanupRunning = true;
     try {
-      const ok = await streamJob(
+      await streamJob(
         "Cleaning up Homebrew cache",
         `brew cleanup --prune=all${cleanupScrub ? " --scrub" : ""}${cleanupVerbose ? " --verbose" : ""}`,
         (onEvent) => brewCleanup(cleanupScrub, cleanupVerbose, onEvent),
       );
-      if (ok) {
-        // Cache shrank — re-measure the Storage card + refresh the estimate.
-        await loadDisk(true);
-      }
+      // Re-measure the Storage card + refresh the "frees ~X" estimate after the
+      // cleanup completes — NOT gated on a clean exit. `brew cleanup` can free
+      // space and still exit non-zero (a file it couldn't remove), and even a
+      // partial cleanup changes what's reclaimable, so always reconcile.
+      await loadDisk(true);
     } catch (e) {
       reportableToastError("Cleanup failed", e);
     } finally {
@@ -1134,10 +1137,16 @@
                   </span>
                 {/if}
               </div>
+              <!-- Findings total + package count: the severity chips count
+                   individual advisories, so spell out "N findings across M of T
+                   packages" rather than implying the chips sum to the package
+                   count. Kept identical to the native Exposure card. -->
               <p class="exp-summary">
+                <strong>{fmt(exposureCounts.total)}</strong>
+                {exposureCounts.total === 1 ? "finding" : "findings"} across
                 <strong>{fmt(exposureCounts.vulnerablePackages)}</strong>
                 of <strong>{fmt(counts.total)}</strong>
-                installed packages have known vulnerabilities
+                installed packages
                 {#if exposureSource}
                   · source: <span class="exp-source">{exposureSource}</span>
                 {/if}

@@ -719,19 +719,25 @@ struct ExposureCard: View {
                     }
                 } else {
                     // Findings — per-severity counts + "X of N" summary line.
+                    // Severity tones mirror the Tauri chips exactly
+                    // (Dashboard.svelte `exp-sev--*`): critical+high danger (red),
+                    // medium warning (amber/orange), low info (blue), unknown
+                    // neutral (gray).
                     HStack(spacing: 16) {
                         sevCount(exposure.critical, "critical", .red)
                         sevCount(exposure.high, "high", .red)
                         sevCount(exposure.medium, "medium", .orange)
-                        sevCount(exposure.low, "low", .yellow)
+                        sevCount(exposure.low, "low", .blue)
                         if exposure.unknown > 0 { sevCount(exposure.unknown, "unknown", .gray) }
                         Spacer()
                     }
-                    // The severity chips count individual advisories (findings);
-                    // a package can have several — so spell out "N findings across
-                    // M of T packages" instead of letting the chips look like they
-                    // should sum to the package count.
-                    Text("\(exposure.total) finding\(exposure.total == 1 ? "" : "s") across \(exposure.vulnerablePackages) of \(model.totalPackages) installed packages")
+                    // Summary line — identical to the Tauri Exposure card
+                    // (Dashboard.svelte): "<N> findings across <M> of <T> installed
+                    // packages · source: <live|cache>". The chips count individual
+                    // advisories (findings), so the line spells out the findings
+                    // total separately from the package count; the source label
+                    // makes a stale (cache) scan visibly distinct from a fresh one.
+                    Text("**\(exposure.total)** finding\(exposure.total == 1 ? "" : "s") across **\(exposure.vulnerablePackages)** of **\(model.totalPackages)** installed packages\(model.vulnSource.map { " · source: \($0.rawValue)" } ?? "")")
                         .font(.callout).foregroundStyle(.secondary)
                     Button("View vulnerable packages →") {
                         model.openVulnerableInLibrary()

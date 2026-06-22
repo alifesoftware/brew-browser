@@ -224,18 +224,26 @@ pub async fn vulns_scan_all(
     }
 
     // Write results + fingerprint back to the cache, then persist.
+    //
+    // REPLACE the per-package entries with exactly this scan's results — a full
+    // `brew vulns` run is authoritative for the whole install. The old code
+    // merged via `put` and returned the entire accumulated cache, so stale
+    // records (old versions, packages OSV no longer flags) piled up and the
+    // Exposure rollup over-reported vs the raw `brew vulns` output (e.g. 33
+    // findings shown vs 17 actual). This mirrors the native shell's wholesale
+    // replace and keeps the two shells' Exposure cards in agreement.
     {
         let mut cache = state.vulns_cache.lock().await;
-        for r in results {
-            cache.put(
+        cache.replace_full_scan(results.into_iter().map(|r| {
+            (
                 VulnKey {
                     kind: PackageKind::Formula,
                     name: r.formula,
                     version: r.version,
                 },
                 r.vulnerabilities,
-            );
-        }
+            )
+        }));
         cache.record_fingerprint(fingerprint.clone());
         cache.save_if_dirty(&state.app_data_dir).await?;
     }

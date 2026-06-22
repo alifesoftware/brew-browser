@@ -932,6 +932,14 @@ public struct GitHubService: Sendable {
         return (token, username, scopes)
     }
 
+    /// Best-effort read of the stored GitHub access token for authenticated
+    /// API calls outside the sign-in flow (e.g. GHSA enrichment). nil when
+    /// signed out. ONE Keychain access. Mirrors the Tauri
+    /// `github::auth::read_token` used by `vulns::enrich`.
+    static func storedToken() -> String? {
+        readCredential()?.token
+    }
+
     /// Persist the combined credential item (token + username + scopes) as one
     /// JSON blob — one Keychain item so every later read is a single prompt.
     private static func writeCredential(token: String, username: String?, scopes: [String]) {

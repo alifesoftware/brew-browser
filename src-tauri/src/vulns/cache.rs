@@ -275,6 +275,33 @@ impl VulnsCache {
         self.dirty = true;
     }
 
+    /// Replace ALL per-package entries with the given full-scan results.
+    ///
+    /// A full `brew vulns` run is authoritative for the entire install: the
+    /// packages it returns ARE the complete set of currently-vulnerable
+    /// packages. Merging each result via [`Self::put`] (the old behavior) and
+    /// returning the whole cache left stale records — old versions of a package
+    /// and packages OSV no longer flags — accumulating across scans, which
+    /// inflated the Exposure rollup far above the raw `brew vulns` count (a real
+    /// bug: 33 findings surfaced vs 17 actually reported). Clearing first drops
+    /// that cruft so the cache always mirrors the latest scan, exactly like the
+    /// native shell's wholesale `vulnFindings = findings`. Fingerprint state is
+    /// preserved (set separately via [`Self::record_fingerprint`]).
+    pub fn replace_full_scan(&mut self, records: impl IntoIterator<Item = (VulnKey, Vec<RawVuln>)>) {
+        self.file.entries.clear();
+        let now = Utc::now();
+        for (key, vulns) in records {
+            self.file.entries.insert(
+                key.to_storage_key(),
+                ScanRecord {
+                    scanned_at: now,
+                    vulns,
+                },
+            );
+        }
+        self.dirty = true;
+    }
+
     /// Drop an entry by key. Marks dirty if anything was removed.
     /// Called after a successful upgrade/uninstall so the next scan
     /// can't surface a CVE for a version the user no longer has.
@@ -392,6 +419,27 @@ mod tests {
         c.put(key("ripgrep", "14.1.0"), vec![]);
         let got = c.get_fresh(&key("ripgrep", "14.1.0")).expect("present");
         assert!(got.vulns.is_empty());
+    }
+
+    #[test]
+    fn replace_full_scan_drops_stale_entries() {
+        // Regression for the Exposure over-count: a full scan must REPLACE the
+        // cache, not accumulate. Prior scans left stale records.
+        let mut c = VulnsCache::new_empty();
+        c.put(key("augeas", "1.14.0"), vec![vuln("CVE-OLD")]); // old version
+        c.put(key("ghostscript", "10.0"), vec![vuln("CVE-GONE-1"), vuln("CVE-GONE-2")]); // no longer flagged
+        assert_eq!(c.file.entries.len(), 2);
+
+        // Fresh full scan: only augeas@1.14.1 with two findings.
+        c.replace_full_scan([(key("augeas", "1.14.1"), vec![vuln("CVE-A"), vuln("CVE-B")])]);
+
+        assert_eq!(c.file.entries.len(), 1, "stale entries must be cleared");
+        assert!(c.get_any(&key("augeas", "1.14.1")).is_some());
+        assert!(c.get_any(&key("augeas", "1.14.0")).is_none(), "old version dropped");
+        assert!(c.get_any(&key("ghostscript", "10.0")).is_none(), "no-longer-flagged dropped");
+        let total: usize = c.file.entries.values().map(|r| r.vulns.len()).sum();
+        assert_eq!(total, 2, "finding total reflects the scan, not the accumulation");
+        assert!(c.dirty);
     }
 
     #[test]

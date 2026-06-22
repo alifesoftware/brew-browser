@@ -940,6 +940,15 @@ public final class AppModel {
     /// frame it as stale ("re-scan to confirm"), never a confident all-clear.
     var vulnScannedThisSession = false
 
+    /// Whether the displayed scan is a fresh run this session (`.live`) or the
+    /// persisted result restored from a previous launch (`.cache`). nil before
+    /// any scan has ever run. Mirrors the Tauri `vulnerabilities.source`
+    /// (`vulnerabilities.svelte.ts:152-155`); drives the Exposure card's
+    /// "· source:" label so a stale cached scan is visibly distinct from a
+    /// fresh one (the gap that made native vs Tauri counts look discrepant).
+    enum VulnSource: String, Sendable { case live, cache }
+    var vulnSource: VulnSource?
+
     /// Aggregate severity rollup across every package in `vulnIndex`. Mirrors
     /// the Tauri `vulnerabilities.severityCounts` derived value: per-severity
     /// finding counts + the count of packages with ≥1 finding.
@@ -1321,9 +1330,14 @@ public final class AppModel {
         var args = ["cleanup", "--prune=all"]
         if scrub { args.append("--scrub") }
         if verbose { args.append("--verbose") }
-        let ok = await startJob("Cleaning up Homebrew cache", args: args, startedAt: Date().timeIntervalSince1970)
+        _ = await startJob("Cleaning up Homebrew cache", args: args, startedAt: Date().timeIntervalSince1970)
         cleanupRunning = false
-        if ok { await loadStorage() }
+        // Re-measure storage + refresh the "frees ~X" estimate regardless of exit
+        // status: `brew cleanup` can free space yet exit non-zero (a file it
+        // couldn't remove), and even a partial cleanup changes what's
+        // reclaimable. loadStorage re-fetches cleanupReclaimableBytes
+        // independently, so a stale estimate can't survive. (Mirrors Tauri.)
+        await loadStorage()
     }
 
     /// Toolbar Refresh — reload whichever surface is showing.
@@ -1717,14 +1731,23 @@ public final class AppModel {
         // smaller set) and was ~331× slower. Run off the main actor so the
         // blocking subprocess I/O doesn't freeze the UI.
         let service = vulns
-        guard let findings = try? await Task.detached(priority: .utility, operation: {
+        guard let rawFindings = try? await Task.detached(priority: .utility, operation: {
             try await service.scanAll()
         }).value else { return }
+        // Best-effort GHSA enrichment — same posture + position as Tauri's
+        // scan_all (commands/vulns.rs:218): fills richer advisory text for
+        // GHSA findings from api.github.com, gated on the GitHub master toggle.
+        // Does NOT change severity or counts. Token read once (anonymous if
+        // signed out); skipped entirely when GitHub is off/Offline Mode on.
+        let token = settings.githubAllowed ? GitHubService.storedToken() : nil
+        let findings = await VulnsEnrich.enrich(
+            rawFindings, githubEnabled: settings.githubAllowed, token: token)
         // Replace wholesale so an uninstalled package drops out of the caches.
         vulnFindings = findings
         vulnIndex = findings.mapValues { VulnSummary.from($0) }
         vulnLastScannedAt = Date()
         vulnScannedThisSession = true
+        vulnSource = .live
         // Persist so the result survives relaunch — the Exposure card shows the
         // last scan instantly instead of re-scanning at every launch.
         persistVulns()
@@ -1756,6 +1779,8 @@ public final class AppModel {
            let findings = try? JSONDecoder().decode([String: [VulnFinding]].self, from: data) {
             vulnFindings = findings
             vulnIndex = findings.mapValues { VulnSummary.from($0) }
+            // Restored from disk → a previous session's scan, not a fresh run.
+            vulnSource = .cache
         }
         let ts = UserDefaults.standard.double(forKey: Self.vulnScannedAtKey)
         if ts > 0 { vulnLastScannedAt = Date(timeIntervalSince1970: ts) }

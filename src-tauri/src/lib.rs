@@ -76,10 +76,11 @@ pub fn run() {
         // would otherwise try the manifest endpoint.
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Issue #17 — persist the window's size + position across launches.
-        // The plugin auto-saves geometry when the window is moved/resized and
-        // on exit, then restores it on the next launch. Default StateFlags
-        // cover size + position (plus maximized/fullscreen) — exactly what the
-        // issue asks for. No frontend wiring: registration is the feature.
+        // The plugin restores saved geometry on launch and saves on a clean
+        // exit. We ALSO save eagerly on every resize/move (see
+        // `.on_window_event` below) so geometry survives dev hot-reloads,
+        // force-quits, and crashes — not just a graceful Cmd-Q. Default
+        // StateFlags cover size + position (plus maximized/fullscreen).
         .plugin(tauri_plugin_window_state::Builder::default().build());
 
     // The native menu is macOS-idiomatic: on macOS it populates the
@@ -126,6 +127,37 @@ pub fn run() {
                 }
             }
             Ok(())
+        })
+        // Persist window geometry shortly after a resize/move settles, not only
+        // on a clean exit — so size/position survive dev hot-reloads,
+        // force-quits, and crashes (issue #17), WITHOUT writing on every drag
+        // tick. macOS fires Resized/Moved continuously during a drag, so we
+        // debounce: each event bumps a generation counter and schedules a save
+        // 400ms out; only the last event in the burst still matches the counter
+        // and actually writes the ~200-byte state file.
+        .on_window_event(|window, event| {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            use tauri::Manager;
+            use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
+            static RESIZE_GEN: AtomicU64 = AtomicU64::new(0);
+            const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+            ) {
+                let my_gen = RESIZE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(DEBOUNCE).await;
+                    // Skip if a newer resize/move arrived during the wait —
+                    // only the final geometry of the burst is written.
+                    if RESIZE_GEN.load(Ordering::SeqCst) == my_gen {
+                        let _ = app.save_window_state(StateFlags::all());
+                    }
+                });
+            }
         })
         .invoke_handler(tauri::generate_handler![
             app_version,
