@@ -390,31 +390,38 @@ struct LibraryView: View {
     }
 
     private var tableWithDescription: some View {
+        // Column minimums sum to 388pt (120+88+72+60+48), which fits UNDER the
+        // detail column's 420pt `.frame(minWidth:)` floor. They used to sum to
+        // 500pt — above the floor — so when the inspector was dragged wide the
+        // Table couldn't compress to fit and its leading edge slid under the
+        // sidebar instead of scaling down. `ideal` widths (unchanged) still
+        // drive the comfortable wide-window layout; the mins only bite when the
+        // pane is squeezed, and now they let it scale rather than clip.
         Table(model.sortedLibraryRows, selection: $selectedID, sortOrder: $model.librarySort) {
             TableColumn("Name", value: \.name) { row in
                 nameCell(row)
             }
-            .width(min: 140, ideal: 200)
+            .width(min: 120, ideal: 200)
 
             TableColumn("Description", value: \.summary) { row in
                 Text(row.summary).foregroundStyle(.secondary).lineLimit(1)
             }
-            .width(min: 160, ideal: 320)
+            .width(min: 88, ideal: 320)
 
             TableColumn("Version", value: \.version) { row in
                 Text(row.version).foregroundStyle(.secondary).monospacedDigit()
             }
-            .width(min: 80, ideal: 120)
+            .width(min: 72, ideal: 120)
 
             TableColumn("Type", value: \.kind.rawValue) { row in
                 KindPill(kind: row.kind)
             }
-            .width(min: 64, ideal: 80)
+            .width(min: 60, ideal: 80)
 
             TableColumn("Outdated", value: \.outdatedRank) { row in
                 outdatedCell(row)
             }
-            .width(min: 56, ideal: 72)
+            .width(min: 48, ideal: 72)
         }
         .onChange(of: selectedID, openSelected)
     }
