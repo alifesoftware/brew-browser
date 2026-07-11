@@ -1405,20 +1405,25 @@
              when off — the section simply doesn't exist. -->
         {#if trendingHistory.enabled}
           {@const series = trendingHistory.seriesFor(pkg.name, pkg.kind)}
-          {#if series && series.points.length >= 2}
+          <!-- Plot ONLY points that carry a per-day estimate — a single,
+               consistent scale. The early "seed"/bootstrap points hold a
+               cumulative count30d (hundreds of thousands to millions) but no
+               estimatedDailyInstalls; falling back to count30d mixed a
+               ~100–1000× larger value into a daily series, so the chart pinned
+               that first point to the top and flattened the real trend into a
+               baseline (the cliff-then-flat artifact every package showed).
+               Seed points simply drop out. -->
+          {@const daily = (series?.points ?? []).filter(
+            (p) => p.estimatedDailyInstalls != null,
+          )}
+          {#if daily.length >= 2}
             <section class="trend-card" aria-label={`Install trend for ${pkg.name}`}>
               <header class="trend-head">
                 <h3>Install trend</h3>
-                <span class="trend-meta text-muted">
-                  {#if series.points.some((p) => p.source === "seed")}
-                    Bootstrap + daily snapshots — granularity grows over time
-                  {:else}
-                    Daily install snapshots
-                  {/if}
-                </span>
+                <span class="trend-meta text-muted">Daily install snapshots</span>
               </header>
               <TrendingSparkline
-                data={series.points.map((p) => p.estimatedDailyInstalls ?? p.count30d ?? 0)}
+                data={daily.map((p) => p.estimatedDailyInstalls ?? 0)}
                 variant="detail"
                 title={`${pkg.name} install trend`}
               />

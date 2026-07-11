@@ -522,11 +522,14 @@ struct PackageDetailView: View {
     }
 
     private func sparkValues(_ s: TrendingHistorySeries) -> [Double] {
-        s.points.compactMap { p in
-            if let e = p.estimatedDailyInstalls { return Double(e) }
-            if let c = p.count30d { return Double(c) }
-            return nil
-        }
+        // Plot ONLY the per-day estimate — a single, consistent scale. The
+        // early "seed"/bootstrap points carry a cumulative `count30d` (hundreds
+        // of thousands to millions) but no `estimatedDailyInstalls`; falling
+        // back to `count30d` mixed a ~100–1000× larger value into a daily
+        // series, so the auto-scaled y-axis pinned that first point to the top
+        // and flattened the real trend into a baseline (the cliff-then-flat
+        // artifact every package showed). Seed points simply drop out.
+        s.points.compactMap { $0.estimatedDailyInstalls.map(Double.init) }
     }
 
     private func useCasesCard(_ cases: [String]) -> some View {
