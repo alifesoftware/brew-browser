@@ -38,6 +38,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable, Hashable {
     case formulae   = "Formulae"
     case casks      = "Casks"
     case outdated   = "Outdated"
+    case pinned     = "Pinned"
     case manual     = "Manual"
     case dependency = "Dependency"
     case vulnerable = "Vulnerable"
@@ -69,6 +70,10 @@ struct LibraryRow: Identifiable, Hashable, Sendable {
     /// adds the replacement from brew info. Clean when the catalog isn't loaded
     /// or the package isn't deprecated/disabled (no badge then). Feature #2.
     let deprecation: DeprecationStatus
+
+    /// Whether the package is pinned (held back from `brew upgrade`). Drives the
+    /// row's "Pinned" badge (#90). From `InstalledPackage.pinned`.
+    let pinned: Bool
 
     /// Comparable proxy for sorting the Outdated column (`Bool` isn't
     /// `Comparable`). Outdated rows sort high so descending surfaces them first.
@@ -200,6 +205,7 @@ public final class AppModel {
             case .formulae:   guard pkg.kind == .formula else { return nil }
             case .casks:      guard pkg.kind == .cask else { return nil }
             case .outdated:   guard outdatedSet.contains(Self.bareToken(pkg.name)) else { return nil }
+            case .pinned:     guard pkg.pinned else { return nil }
             // Manual = installed on request; Dependency = a formula NOT on request
             // (casks are always on-request, so never appear under Dependency) (#3).
             case .manual:     guard pkg.installedOnRequest else { return nil }
@@ -222,7 +228,8 @@ public final class AppModel {
                 summary: showSummary ? (entry?.summary ?? "") : "",
                 maxSeverity: (vuln?.total ?? 0) > 0 ? vuln?.maxSeverity : nil,
                 vulnCount: vuln?.total ?? 0,
-                deprecation: deprecationStatus(pkg.name, pkg.kind)
+                deprecation: deprecationStatus(pkg.name, pkg.kind),
+                pinned: pkg.pinned
             )
         }
     }
@@ -239,6 +246,7 @@ public final class AppModel {
         case .formulae:   return installed.lazy.filter { $0.kind == .formula }.count
         case .casks:      return installed.lazy.filter { $0.kind == .cask }.count
         case .outdated:   return outdatedNames.count
+        case .pinned:     return installed.lazy.filter { $0.pinned }.count
         case .manual:     return installed.lazy.filter { $0.installedOnRequest }.count
         case .dependency: return installed.lazy.filter { $0.kind == .formula && !$0.installedOnRequest }.count
         case .vulnerable: return vulnerableCount
@@ -1233,7 +1241,7 @@ public final class AppModel {
     var totalPackages: Int { formulaCount + caskCount }
 
     /// First 5 outdated packages for the Dashboard preview list.
-    var outdatedPreview: [OutdatedPackage] { Array(outdated.prefix(5)) }
+    var outdatedPreview: [OutdatedPackage] { Array(outdated.lazy.filter { !$0.pinned }.prefix(5)) }
 
     /// Total bytes across all storage categories.
     var storageTotalBytes: Int64 { storage.reduce(0) { $0 + $1.bytes } }
@@ -1272,14 +1280,16 @@ public final class AppModel {
         }
         async let leaves = try? brew.countLeaves()
         async let onRequest = try? brew.countOnRequest()
-        async let pinned = try? brew.countPinned()
         async let ver = brew.version()
         async let pfx = brew.prefix()
         async let services = brew.countRunningServices()
 
         leavesCount = await leaves ?? 0
         onRequestCount = await onRequest ?? 0
-        pinnedCount = await pinned ?? 0
+        // Count pins from the installed list (its top-level `pinned` covers
+        // formulae AND casks) rather than `brew list --pinned`, which only
+        // reports pinned formulae and would undercount pinned casks (#90).
+        pinnedCount = installed.lazy.filter { $0.pinned }.count
         brewVersion = await ver
         brewPrefix = await pfx
         runningServices = await services
@@ -1297,7 +1307,12 @@ public final class AppModel {
     func loadOutdated() async {
         outdatedLoading = true
         outdated = (try? await brew.outdatedPackages()) ?? []
-        outdatedCount = outdated.count
+        // `brew outdated --json` still lists pinned packages (flagged
+        // `pinned: true`), but they're intentionally held back (#90) and brew
+        // upgrade skips them — so the nag count (sidebar badge, Dashboard
+        // "updates available", "Upgrade all (N)") counts only upgradable ones.
+        // The Library's Outdated filter still shows pinned rows (badged).
+        outdatedCount = outdated.lazy.filter { !$0.pinned }.count
         outdatedLoading = false
     }
 
@@ -1848,6 +1863,23 @@ public final class AppModel {
         if greedy { args.append("--greedy") }
         let ok = await startJob("Upgrading \(pkg.name)", args: args, startedAt: Date().timeIntervalSince1970)
         if ok, let pkg = detailPackage { await loadDetail(pkg) }
+    }
+
+    /// Pin/unpin the detail package via `brew pin`/`unpin` (#90). Quiet and
+    /// non-streaming — an instant flag flip, so it toasts success/failure
+    /// rather than spawning an Activity job. On success `refresh()` reloads the
+    /// installed + outdated lists (so the honest update count and Library badge
+    /// re-derive) and the detail reloads so the footer button flips.
+    func setPinnedDetail(_ pinned: Bool) async {
+        guard let pkg = detailPackage else { return }
+        do {
+            try await brew.setPinned(pkg.name, kind: pkg.kind, pinned: pinned)
+            pushToast(.success, pinned ? "Pinned \(pkg.name)" : "Unpinned \(pkg.name)")
+            await refresh()
+            if let pkg = detailPackage { await loadDetail(pkg) }
+        } catch {
+            pushToast(.error, pinned ? "Pin failed" : "Unpin failed", error.localizedDescription)
+        }
     }
 
     /// Uninstall the detail package. `ignoreDependencies` adds

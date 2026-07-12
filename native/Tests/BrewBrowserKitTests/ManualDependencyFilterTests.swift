@@ -118,6 +118,33 @@ struct InstalledPackageOnRequestTests {
         #expect(byName["docker-desktop"]?.installedOnRequest == true)
     }
 
+    @Test func installedInfoV2ReadsPinnedForFormulaeAndCasks() throws {
+        // `brew info --installed --json=v2` exposes a top-level `pinned` bool on
+        // both formulae and casks; parseInstalledInfoV2 must surface it so the
+        // Library badge + honest update count work (#90). Absent = false.
+        let raw = """
+        {
+          "formulae": [
+            { "name": "php@8.4", "pinned": true,
+              "installed": [ { "version": "8.4.1", "installed_on_request": true } ] },
+            { "name": "wget",
+              "installed": [ { "version": "1.25.0", "installed_on_request": true } ] }
+          ],
+          "casks": [
+            { "token": "google-chrome", "version": "1.0", "installed": "1.0", "pinned": true },
+            { "token": "rectangle", "version": "0.84", "installed": "0.84" }
+          ]
+        }
+        """
+        let byName = Dictionary(uniqueKeysWithValues:
+            try BrewService.parseInstalledInfoV2(raw).map { ($0.name, $0) })
+
+        #expect(byName["php@8.4"]?.pinned == true)
+        #expect(byName["wget"]?.pinned == false)        // absent → false
+        #expect(byName["google-chrome"]?.pinned == true) // casks pin too
+        #expect(byName["rectangle"]?.pinned == false)
+    }
+
     @MainActor
     @Test func tapQualifiedTokensMatchBareInstalledPackage() {
         let m = AppModel()

@@ -10,7 +10,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 use uuid::Uuid;
 
-use crate::brew::exec::run_brew_streaming;
+use crate::brew::exec::{run_brew_capture, run_brew_streaming};
 use crate::commands::info::validate_package_name;
 use crate::error::BrewError;
 use crate::state::AppState;
@@ -70,6 +70,16 @@ fn upgrade_args(names: &[String], greedy: bool) -> Vec<String> {
         args.push("--greedy".to_string());
     }
     args
+}
+
+/// `brew pin <kind> <name>` / `brew unpin <kind> <name>`. Pinning holds a
+/// package back so `brew upgrade` (including `--greedy`) skips it — the in-app
+/// "stop nagging me about this one" hold for #90/#134. Current Homebrew pins
+/// both formulae and casks, so the kind flag disambiguates a name that exists
+/// as both. `pinned == true` pins; `false` unpins.
+fn pin_args(name: &str, kind: PackageKind, pinned: bool) -> Vec<String> {
+    let verb = if pinned { "pin" } else { "unpin" };
+    vec![verb.to_string(), kind_flag(kind).to_string(), name.to_string()]
 }
 
 /// User-facing command string for the Activity log, derived from the argv.
@@ -310,6 +320,36 @@ pub async fn brew_autoremove(
     result
 }
 
+/// `brew pin`/`unpin` a single package (issue #90, folds in #134). Fast and
+/// non-streaming — pin is an instant metadata flip with trivial output, so it
+/// runs through `run_brew_capture` and returns once done rather than spawning a
+/// tracked Activity job. Still serialized behind the write lock (so it can't
+/// race a concurrent upgrade) and invalidates caches on success so the pinned
+/// badge and the honest "updates available" count re-derive from fresh
+/// `brew info`/`brew outdated` data. A non-zero exit (e.g. package not
+/// installed) surfaces as a friendly `BrewExitNonZero`, same as the other
+/// write commands.
+#[tauri::command]
+pub async fn brew_set_pinned(
+    name: String,
+    kind: PackageKind,
+    pinned: bool,
+    state: State<'_, AppState>,
+) -> Result<(), BrewError> {
+    validate_package_name(&name)?;
+    let path = state.require_brew_path().await?;
+
+    let args = pin_args(&name, kind, pinned);
+    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let display = display_for(&args);
+    let lock = state.brew_write_lock.clone();
+
+    let _guard = lock.lock_owned().await;
+    run_brew_capture(&path, &str_args, &display).await?;
+    state.invalidate_caches().await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn cancel_job(job_id: Uuid, state: State<'_, AppState>) -> Result<(), BrewError> {
     let mut map = state.jobs.lock().await;
@@ -404,6 +444,27 @@ mod tests {
         assert_eq!(
             display_for(&install_args("cursor", PackageKind::Cask, false, true)),
             "brew install --cask cursor --adopt"
+        );
+    }
+
+    #[test]
+    fn pin_formula_and_cask() {
+        assert_eq!(
+            pin_args("wget", PackageKind::Formula, true),
+            svec(&["pin", "--formula", "wget"])
+        );
+        // Casks pin too in current Homebrew — the actual #90/#134 case.
+        assert_eq!(
+            pin_args("google-chrome", PackageKind::Cask, true),
+            svec(&["pin", "--cask", "google-chrome"])
+        );
+    }
+
+    #[test]
+    fn unpin_uses_unpin_verb() {
+        assert_eq!(
+            pin_args("google-chrome", PackageKind::Cask, false),
+            svec(&["unpin", "--cask", "google-chrome"])
         );
     }
 }

@@ -314,6 +314,18 @@ struct BrewArgsTests {
         #expect(BrewArgs.uninstall("foo", kind: .formula, zap: true, ignoreDependencies: true)
             == ["uninstall", "foo", "--ignore-dependencies"])
     }
+
+    @Test func pinFormulaAndCask() {
+        #expect(BrewArgs.setPinned("wget", kind: .formula, pinned: true) == ["pin", "wget"])
+        // Casks pin too in current Homebrew — the actual #90/#134 case.
+        #expect(BrewArgs.setPinned("google-chrome", kind: .cask, pinned: true)
+            == ["pin", "--cask", "google-chrome"])
+    }
+
+    @Test func unpinUsesUnpinVerb() {
+        #expect(BrewArgs.setPinned("google-chrome", kind: .cask, pinned: false)
+            == ["unpin", "--cask", "google-chrome"])
+    }
 }
 
 @Suite("BrewRecovery")

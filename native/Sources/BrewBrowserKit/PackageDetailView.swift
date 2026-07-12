@@ -522,11 +522,14 @@ struct PackageDetailView: View {
     }
 
     private func sparkValues(_ s: TrendingHistorySeries) -> [Double] {
-        s.points.compactMap { p in
-            if let e = p.estimatedDailyInstalls { return Double(e) }
-            if let c = p.count30d { return Double(c) }
-            return nil
-        }
+        // Plot ONLY the per-day estimate — a single, consistent scale. The
+        // early "seed"/bootstrap points carry a cumulative `count30d` (hundreds
+        // of thousands to millions) but no `estimatedDailyInstalls`; falling
+        // back to `count30d` mixed a ~100–1000× larger value into a daily
+        // series, so the auto-scaled y-axis pinned that first point to the top
+        // and flattened the real trend into a baseline (the cliff-then-flat
+        // artifact every package showed). Seed points simply drop out.
+        s.points.compactMap { $0.estimatedDailyInstalls.map(Double.init) }
     }
 
     private func useCasesCard(_ cases: [String]) -> some View {
@@ -754,6 +757,20 @@ struct PackageDetailView: View {
             // during the post-install detail refresh.
             if info != nil || isInstalled {
                 if isInstalled {
+                    // Pin/Unpin (#90) — held-back packages drop out of the
+                    // update count. State from the loaded info; casks pin too.
+                    Button {
+                        Task { await model.setPinnedDetail(!(info?.pinned ?? false)) }
+                    } label: {
+                        Label(info?.pinned == true ? "Unpin" : "Pin",
+                              systemImage: info?.pinned == true ? "pin.slash" : "pin")
+                    }
+                    .disabled(model.actionRunning)
+                    .help(info?.pinned == true
+                        ? "Unpin — let brew upgrade update this again"
+                        : (model.detailPackage?.kind == .cask
+                            ? "Pin — hold back from brew upgrade. A cask that self-updates may still update on its own."
+                            : "Pin — hold back from brew upgrade"))
                     if info?.isOutdated == true {
                         Button {
                             Task { await model.upgradeDetail(greedy: LocalPrefs.shared.greedyUpgrade) }

@@ -243,6 +243,21 @@ export function brewUpdate(
   });
 }
 
+/**
+ * Issue #90 (folds in #134) — `brew pin`/`unpin` a package so `brew upgrade`
+ * (including `--greedy`) skips it. Non-streaming: pin is an instant flip, so
+ * this resolves once done rather than emitting Activity events. `pinned=true`
+ * pins, `false` unpins. On success the backend invalidates its caches, so
+ * callers should reload the package list to pick up the new pin state.
+ */
+export function brewSetPinned(
+  name: string,
+  kind: PackageKind,
+  pinned: boolean,
+): Promise<void> {
+  return invoke<void>("brew_set_pinned", { name, kind, pinned });
+}
+
 /** Issue #80 — stream `brew doctor` diagnostics into the Activity drawer.
  *  (Distinct from the onboarding `brewDoctor()` env probe above.) A non-zero
  *  exit from advisories is reported by the backend as effective-success. */
