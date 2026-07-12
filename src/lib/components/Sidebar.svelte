@@ -10,6 +10,7 @@
   import XIcon from "@lucide/svelte/icons/x";
 
   import { ui } from "$lib/stores/ui.svelte";
+  import { library } from "$lib/stores/library.svelte";
   import { packages } from "$lib/stores/packages.svelte";
   import { activity } from "$lib/stores/activity.svelte";
   import { brewfiles } from "$lib/stores/brewfiles.svelte";
@@ -187,10 +188,14 @@
     return `${n} package${n === 1 ? "" : "s"} with known vulnerabilities`;
   });
 
-  function openVulnDashboard() {
-    // The Dashboard's Exposure card (Agent A) is the canonical landing
-    // for vuln triage — keep this in sync if that surface moves.
-    ui.setSection("dashboard");
+  function openVulnerableInLibrary() {
+    // Jump to Library filtered to the vulnerable packages — parity with the
+    // native footer (`AppModel.openVulnerableInLibrary`) and the Dashboard
+    // Exposure card's "View vulnerable packages" link. setSection FIRST so any
+    // chip clears don't stomp the filter pick. The footer only renders when
+    // vulnerabilities are enabled, so the gated `vulnerable` pill is available.
+    ui.setSection("library");
+    library.setFilter("vulnerable");
   }
 </script>
 
@@ -311,7 +316,7 @@
         class="vuln-badge tone-{vulnBadgeTone}"
         title={vulnBadgeTooltip}
         aria-label={vulnBadgeTooltip}
-        onclick={openVulnDashboard}
+        onclick={openVulnerableInLibrary}
       >
         <span class="vuln-dot" aria-hidden="true"></span>
         <span class="vuln-count">{vulnBadgeCount}</span>
