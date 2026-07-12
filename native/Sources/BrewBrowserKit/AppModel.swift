@@ -177,8 +177,14 @@ public final class AppModel {
         KeyPathComparator(\LibraryRow.name, order: .forward)
     ]
 
-    /// Set of outdated package names for O(1) per-row tagging.
-    private var outdatedNames: Set<String> { Set(outdated.map(\.name)) }
+    /// Set of outdated package names for O(1) per-row tagging, keyed by BARE
+    /// token. `brew outdated` reports tap formulae fully-qualified
+    /// (`shivammathur/php/php@8.4`) while `brew info --installed` — the source
+    /// of the Library rows — reports the bare token (`php@8.4`). Matching the
+    /// raw names dropped tap-installed packages from the Outdated filter and
+    /// their outdated dot; normalising both sides through `bareToken` fixes it
+    /// (same tap-name class as #92). Compare with `bareToken(pkg.name)`.
+    private var outdatedNames: Set<String> { Set(outdated.map { Self.bareToken($0.name) }) }
 
     /// The Library rows after the type filter + text query, before sorting.
     /// Each row carries its outdated flag and (AI-gated) enrichment summary so
@@ -198,7 +204,7 @@ public final class AppModel {
             case .all:        break
             case .formulae:   guard pkg.kind == .formula else { return nil }
             case .casks:      guard pkg.kind == .cask else { return nil }
-            case .outdated:   guard outdatedSet.contains(pkg.name) else { return nil }
+            case .outdated:   guard outdatedSet.contains(Self.bareToken(pkg.name)) else { return nil }
             case .pinned:     guard pkg.pinned else { return nil }
             // Manual = installed on request; Dependency = a formula NOT on request
             // (casks are always on-request, so never appear under Dependency) (#3).
@@ -218,7 +224,7 @@ public final class AppModel {
                 friendlyName: (friendly != pkg.name) ? friendly : "",
                 version: pkg.version,
                 kind: pkg.kind,
-                isOutdated: outdatedSet.contains(pkg.name),
+                isOutdated: outdatedSet.contains(Self.bareToken(pkg.name)),
                 summary: showSummary ? (entry?.summary ?? "") : "",
                 maxSeverity: (vuln?.total ?? 0) > 0 ? vuln?.maxSeverity : nil,
                 vulnCount: vuln?.total ?? 0,

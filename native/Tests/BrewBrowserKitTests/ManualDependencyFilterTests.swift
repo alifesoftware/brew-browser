@@ -204,6 +204,30 @@ struct ManualDependencyFilterTests {
         #expect(names == ["openssl@3", "legacy-keg"])
     }
 
+    @Test func outdatedFilterMatchesTapQualifiedOutdatedName() {
+        // Regression: `brew outdated` reports tap formulae fully-qualified
+        // (`shivammathur/php/php@8.4`) while `brew info --installed` — the Library
+        // row source — reports the bare token (`php@8.4`). The outdated filter
+        // must match through bareToken, else tap-installed packages get dropped
+        // from the filter + outdated dot (the "Swift shows 8, Tauri shows 9" bug).
+        let m = AppModel()
+        m.installed = [
+            InstalledPackage(name: "php@8.4", version: "8.4.20", kind: .formula, installedOnRequest: true),
+            InstalledPackage(name: "wget", version: "1.24", kind: .formula, installedOnRequest: true),
+        ]
+        m.outdated = [
+            OutdatedPackage(name: "shivammathur/php/php@8.4", installedVersion: "8.4.20",
+                            currentVersion: "8.4.23", kind: .formula),
+        ]
+        m.libraryFilter = .outdated
+        #expect(m.libraryRows.contains { $0.name == "php@8.4" })  // tap-qualified matched the bare token
+        #expect(m.libraryFilterCount(.outdated) == 1)
+        // A bare outdated name still matches (no regression for non-tap formulae).
+        m.outdated = [OutdatedPackage(name: "wget", installedVersion: "1.24",
+                                      currentVersion: "1.25", kind: .formula)]
+        #expect(m.libraryRows.map(\.name) == ["wget"])
+    }
+
     @Test func bothTruePackageShowsManualNotDependency() {
         // `ruby` is on request AND a dependency of another formula → Manual wins,
         // never appears under Dependency (predicate excludes on-request).
